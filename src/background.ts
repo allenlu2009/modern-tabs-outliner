@@ -1,9 +1,37 @@
 // Background service worker for Tabs Outliner
 
-// Setup side panel behavior on click
-chrome.sidePanel
-  .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((error: any) => console.error(error));
+let outlinerWindowId: number | null = null;
+
+chrome.action.onClicked.addListener(async () => {
+  if (outlinerWindowId !== null) {
+    try {
+      await chrome.windows.update(outlinerWindowId, { focused: true });
+      return;
+    } catch (e) {
+      outlinerWindowId = null;
+    }
+  }
+  
+  const win = await chrome.windows.create({
+    url: chrome.runtime.getURL('index.html'),
+    type: 'popup',
+    width: 420,
+    height: 800,
+    top: 50,
+    left: 50,
+    focused: true
+  });
+  
+  if (win.id) {
+    outlinerWindowId = win.id;
+  }
+});
+
+chrome.windows.onRemoved.addListener(async (windowId) => {
+  if (windowId === outlinerWindowId) {
+    outlinerWindowId = null;
+  }
+});
 
 // Initialize or update tree on startup
 chrome.runtime.onInstalled.addListener(async () => {
