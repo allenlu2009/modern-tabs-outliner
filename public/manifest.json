@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Modern Tabs Outliner",
+  "version": "1.0.0",
+  "description": "A modern tabs outliner for Chrome and Edge.",
+  "permissions": [
+    "tabs",
+    "windows",
+    "storage",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "action": {
+    "default_title": "Open Tabs Outliner"
+  }
+}
