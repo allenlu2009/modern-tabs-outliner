@@ -99,9 +99,19 @@ function App() {
             if (parent && parent.children) {
               parent.children.push(hydratedNode);
             } else {
-               // Orphand, add to root
                rootNodes.push(hydratedNode);
             }
+          }
+        });
+
+        // Fix order based on childIds
+        nodeMap.forEach(node => {
+          if (node.children && node.childIds) {
+            node.children.sort((a, b) => {
+              const idxA = node.childIds.indexOf(a.id);
+              const idxB = node.childIds.indexOf(b.id);
+              return (idxA === -1 ? 9999 : idxA) - (idxB === -1 ? 9999 : idxB);
+            });
           }
         });
 

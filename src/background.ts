@@ -83,6 +83,14 @@ async function reconcileTabs() {
   const existingNodes = await getAllNodes();
   const nodeMap = new Map(existingNodes.map(n => [n.id, n]));
 
+  // Create lookups to securely match stable nodes across sessions
+  const winByBrowserId = new Map(existingNodes.filter(n => n.type === 'window' && n.browserWindowId).map(n => [n.browserWindowId, n]));
+  const tabByBrowserId = new Map(existingNodes.filter(n => n.type === 'tab' && n.browserTabId).map(n => [n.browserTabId, n]));
+
+  function generateId() {
+    return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
+  }
+
   // 2. Mark previously "open" nodes that no longer exist as "crashed" or "saved"
   for (const node of existingNodes) {
     if (node.status === "open") {
@@ -100,12 +108,10 @@ async function reconcileTabs() {
   for (const w of windows) {
     if (w.id === outlinerWindowId) continue; // Skip the popup window
 
-    const winIdStr = `win-${w.id}`;
-    let winNode = nodeMap.get(winIdStr);
-    
+    let winNode = winByBrowserId.get(w.id);
     if (!winNode) {
       winNode = {
-        id: winIdStr,
+        id: `win-${w.id}-${generateId()}`,
         type: "window",
         parentId: "root",
         childIds: [],
@@ -119,20 +125,19 @@ async function reconcileTabs() {
     } else {
       winNode.status = "open";
       winNode.updatedAt = now;
+      if (!winNode.childIds) winNode.childIds = [];
     }
     
-    const childIds: string[] = [];
+    const activeTabIds: string[] = [];
     
     for (const t of (w.tabs || [])) {
-      const tabIdStr = `tab-${t.id}`;
-      childIds.push(tabIdStr);
-      let tabNode = nodeMap.get(tabIdStr);
+      let tabNode = tabByBrowserId.get(t.id);
       
       if (!tabNode) {
         tabNode = {
-          id: tabIdStr,
+          id: `tab-${t.id}-${generateId()}`,
           type: "tab",
-          parentId: winIdStr,
+          parentId: winNode.id,
           childIds: [],
           title: t.title || "New Tab",
           url: t.url,
@@ -151,13 +156,21 @@ async function reconcileTabs() {
         tabNode.url = t.url || tabNode.url;
         tabNode.favIconUrl = t.favIconUrl || tabNode.favIconUrl;
         tabNode.updatedAt = now;
-        tabNode.parentId = winIdStr;
+        tabNode.parentId = winNode.id;
         tabNode.active = t.active;
       }
+      activeTabIds.push(tabNode.id);
       nodesToSave.push(tabNode);
     }
     
-    winNode.childIds = childIds;
+    // Safely append new tabs without overwriting the historical saved ones
+    const finalChildIds = [...(winNode.childIds || [])];
+    for (const id of activeTabIds) {
+      if (!finalChildIds.includes(id)) {
+        finalChildIds.push(id);
+      }
+    }
+    winNode.childIds = finalChildIds;
     nodesToSave.push(winNode);
   }
 
