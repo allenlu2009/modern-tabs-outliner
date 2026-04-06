@@ -8,7 +8,7 @@ const intentionallySavedNodes = new Set<string>();
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "INTENTIONAL_SAVE") {
     intentionallySavedNodes.add(msg.nodeId);
-    return true;
+    return false;
   }
   if (msg.type === "RESTORE_NODE") {
     pauseReconcile = true;
@@ -31,7 +31,7 @@ chrome.runtime.onMessage.addListener((msg) => {
         safeReconcile();
       }
     });
-    return true;
+    return false;
   }
 });
 
