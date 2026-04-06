@@ -33,15 +33,31 @@ body {
 .outliner-container {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   width: 100%;
   box-sizing: border-box;
+}
+
+.session-root {
+  font-size: 13px;
+  font-weight: bold;
+  padding: 4px 0 8px 4px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--item-border);
+  margin-bottom: 4px;
+  color: var(--text-color);
+}
+
+.root-icon {
+  margin-right: 6px;
+  font-size: 14px;
 }
 
 .tree-node {
   display: flex;
   flex-direction: column;
-  margin-left: 12px;
+  margin-left: 10px;
   position: relative;
 }
 
@@ -58,10 +74,10 @@ body {
 .node-content {
   display: flex;
   align-items: center;
-  padding: 4px 8px;
+  padding: 2px 4px;
   background-color: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 3px;
   margin-bottom: 2px;
   cursor: pointer;
   transition: all 0.1s ease;
@@ -80,19 +96,19 @@ body {
 }
 
 .favicon {
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
-  min-height: 16px;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
   flex-shrink: 0;
   object-fit: contain;
-  margin-right: 12px;
+  margin-right: 6px;
   border-radius: 2px;
 }
 
 .node-title {
   flex: 1 1 auto;
-  font-size: 13px;
+  font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -133,11 +149,21 @@ body {
 }
 
 .window-header {
-  font-size: 14px;
-  font-weight: 700;
-  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  margin-top: 4px;
   color: var(--accent);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+
+.child-count {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--text-color);
+  opacity: 0.7;
 }

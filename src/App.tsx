@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import './App.css';
 import type { TreeNode } from './types';
-import { getAllNodes } from './storage';
+import { getAllNodes, removeNode } from './storage';
 function NodeItem({ node }: { node: TreeNode }) {
   const [collapsed, setCollapsed] = useState(!!node.collapsed);
 
@@ -25,15 +25,21 @@ function NodeItem({ node }: { node: TreeNode }) {
 
   const removeNodeBtn = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    // To be implemented: actual removeNode(node.id) from indexedDB
-    console.log("Remove node clicked", node.id);
+    try {
+      await removeNode(node.id);
+      if (typeof chrome !== 'undefined' && chrome.runtime) {
+        chrome.runtime.sendMessage({ type: "TREE_UPDATED" }).catch(err => console.log(err));
+      }
+    } catch(err) {
+      console.error(err);
+    }
   };
 
   return (
     <div className="tree-node">
       {node.type === 'window' ? (
         <div className="window-header" onClick={() => setCollapsed(!collapsed)}>
-          {collapsed ? '▶ ' : '▼ '} {node.title} 
+          {collapsed ? '▶ ' : '▼ '} {node.title} {collapsed && node.children && <span className="child-count">({node.children.length})</span>}
           {node.status !== 'open' && <span className="status-badge">[{node.status}]</span>}
         </div>
       ) : (
@@ -48,9 +54,6 @@ function NodeItem({ node }: { node: TreeNode }) {
               <button className="btn-icon" onClick={closeTab} title="Close Tab">⨯</button>
             )}
             <button className="btn-icon" onClick={removeNodeBtn} title="Remove Node">🗑️</button>
-            {node.status !== 'open' && (
-              <span className="status-label">{node.status}</span>
-            )}
           </div>
         </div>
       )}
@@ -144,6 +147,9 @@ function App() {
 
   return (
     <div className="outliner-container">
+      <div className="session-root">
+        <span className="root-icon">🌐</span> Current Session
+      </div>
       {treeData.map(node => (
         <NodeItem key={node.id} node={node} />
       ))}
