@@ -252,9 +252,26 @@ async function reconcileTabs() {
   broadcastUpdate();
 }
 
+let isReconciling = false;
+let pendingReconcile = false;
+
 async function safeReconcile() {
   if (pauseReconcile) return;
-  await reconcileTabs();
+  if (isReconciling) {
+    pendingReconcile = true;
+    return;
+  }
+  
+  isReconciling = true;
+  try {
+    await reconcileTabs();
+  } finally {
+    isReconciling = false;
+    if (pendingReconcile) {
+      pendingReconcile = false;
+      safeReconcile();
+    }
+  }
 }
 
 // Reconcile tree on major tab/window events
@@ -262,6 +279,10 @@ chrome.tabs.onCreated.addListener(safeReconcile);
 chrome.tabs.onRemoved.addListener(safeReconcile);
 chrome.tabs.onUpdated.addListener(safeReconcile);
 chrome.tabs.onActivated.addListener(safeReconcile);
+chrome.tabs.onMoved.addListener(safeReconcile);
+chrome.tabs.onAttached.addListener(safeReconcile);
+chrome.tabs.onDetached.addListener(safeReconcile);
+chrome.tabs.onReplaced.addListener(safeReconcile);
 chrome.windows.onCreated.addListener(safeReconcile);
 chrome.windows.onRemoved.addListener(safeReconcile);
 chrome.windows.onFocusChanged.addListener(safeReconcile);
