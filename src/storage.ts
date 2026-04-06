@@ -61,3 +61,13 @@ export async function removeNode(id: string): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
 }
+
+export async function clearAllNodes(): Promise<void> {
+  const db = await getDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}

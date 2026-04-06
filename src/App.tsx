@@ -21,7 +21,12 @@ function NodeItem({ node }: { node: TreeNode }) {
   const closeTab = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (typeof chrome !== 'undefined' && chrome.tabs && node.browserTabId) {
-      chrome.tabs.remove(node.browserTabId);
+      if (chrome.runtime) {
+        try {
+          await chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: node.id });
+        } catch (e) { console.error(e); }
+      }
+      chrome.tabs.remove(node.browserTabId).catch(() => {});
     }
   };
 

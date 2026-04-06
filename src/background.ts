@@ -1,10 +1,15 @@
 import type { BaseNode } from "./types";
-import { putNodes, getAllNodes, putNode } from "./storage";
+import { putNodes, getAllNodes, putNode, removeNode, clearAllNodes } from "./storage";
 
 let outlinerWindowId: number | null = null;
 let pauseReconcile = false;
+const intentionallySavedNodes = new Set<string>();
 
 chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "INTENTIONAL_SAVE") {
+    intentionallySavedNodes.add(msg.nodeId);
+    return true;
+  }
   if (msg.type === "RESTORE_NODE") {
     pauseReconcile = true;
     chrome.tabs.create({ url: msg.url, active: true }, async (t) => {
@@ -61,8 +66,12 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   }
 });
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   console.log("Extension installed and initialized.");
+  if (details.reason === "update" || details.reason === "install") {
+     console.log("Developer Reload Detected: Wiping stale IDB cache to rebuild from absolute browser state...");
+     await clearAllNodes();
+  }
   await reconcileTabs();
 });
 
@@ -92,15 +101,24 @@ async function reconcileTabs() {
   }
 
   // 2. Mark previously "open" nodes that no longer exist as "crashed" or "saved"
+  const nodesToRemove = new Set<string>();
+  
   for (const node of existingNodes) {
     if (node.status === "open") {
       if (node.type === "window" && node.browserWindowId && !activeWindowIds.has(node.browserWindowId)) {
         node.status = "crashed";
         nodesToSave.push(node);
       } else if (node.type === "tab" && node.browserTabId && !activeTabIds.has(node.browserTabId)) {
-        node.status = "saved";
-        node.active = false;
-        nodesToSave.push(node);
+        // Did the user click 'X' inside the outliner UI specifically to save it?
+        if (intentionallySavedNodes.has(node.id)) {
+           node.status = "saved";
+           node.active = false;
+           nodesToSave.push(node);
+           intentionallySavedNodes.delete(node.id);
+        } else {
+           // Standard Native Chrome close - DESTROY node entirely to keep strict sync.
+           nodesToRemove.add(node.id);
+        }
       }
     }
   }
@@ -170,6 +188,9 @@ async function reconcileTabs() {
     const activeTabsToInsert = [...activeTabIds]; // Consume this array
     
     for (const oldId of (winNode.childIds || [])) {
+      if (nodesToRemove.has(oldId)) {
+         continue; // Purge native closed tabs completely from hierarchy!
+      }
       if (activeTabIds.includes(oldId)) {
          // This is a slot previously occupied by an open tab. We drop the NEXT structurally ordered Chrome tab here.
          if (activeTabsToInsert.length > 0) {
@@ -220,6 +241,12 @@ async function reconcileTabs() {
   const uniqueNodesToSave = new Map(nodesToSave.map(n => [n.id, n]));
   if (uniqueNodesToSave.size > 0) {
      await putNodes(Array.from(uniqueNodesToSave.values()));
+  }
+  
+  if (nodesToRemove.size > 0) {
+     for (const dyingId of nodesToRemove) {
+        await removeNode(dyingId);
+     }
   }
 
   broadcastUpdate();
