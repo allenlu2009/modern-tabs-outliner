@@ -116,6 +116,10 @@ body {
   min-width: 0;
 }
 
+.node-title.active-tab {
+  font-weight: bold;
+}
+
 .node-actions {
   display: flex;
   gap: 4px;

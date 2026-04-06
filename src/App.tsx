@@ -11,9 +11,9 @@ function NodeItem({ node }: { node: TreeNode }) {
         await chrome.windows.update(node.browserWindowId, { focused: true });
         await chrome.tabs.update(node.browserTabId, { active: true });
       } else if (node.url && node.status !== 'open') {
-        await removeNode(node.id);
-        await chrome.tabs.create({ url: node.url });
-        window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+        if (typeof chrome !== 'undefined' && chrome.runtime) {
+          chrome.runtime.sendMessage({ type: "RESTORE_NODE", nodeId: node.id, url: node.url }).catch(err => console.log(err));
+        }
       }
     }
   };
@@ -53,7 +53,7 @@ function NodeItem({ node }: { node: TreeNode }) {
           onClick={focusTab}
         >
           {node.favIconUrl && <img src={node.favIconUrl} className="favicon" alt="icon" />}
-          <div className="node-title" title={node.title}>{node.title}</div>
+          <div className={`node-title ${node.active ? 'active-tab' : ''}`} title={node.title}>{node.title}</div>
           <div className="node-actions">
             {node.status === 'open' && (
               <button className="btn-icon" onClick={closeTab} title="Close Tab">⨯</button>

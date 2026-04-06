@@ -26,6 +26,7 @@ export interface BaseNode {
   audible?: boolean;
   muted?: boolean;
   incognito?: boolean;
+  active?: boolean;
 }
 
 // Hydrated tree node for UI rendering

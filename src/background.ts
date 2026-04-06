@@ -1,7 +1,34 @@
 import type { BaseNode } from "./types";
-import { putNodes, getAllNodes } from "./storage";
+import { putNodes, getAllNodes, putNode } from "./storage";
 
 let outlinerWindowId: number | null = null;
+let pauseReconcile = false;
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "RESTORE_NODE") {
+    pauseReconcile = true;
+    chrome.tabs.create({ url: msg.url, active: true }, async (t) => {
+      try {
+        const nodes = await getAllNodes();
+        const nodeMap = new Map(nodes.map(n => [n.id, n]));
+        const node = nodeMap.get(msg.nodeId);
+        if (node) {
+          node.browserTabId = t.id;
+          node.browserWindowId = t.windowId;
+          node.status = "open";
+          node.active = true;
+          await putNode(node);
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        pauseReconcile = false;
+        safeReconcile();
+      }
+    });
+    return true;
+  }
+});
 
 chrome.action.onClicked.addListener(async () => {
   if (outlinerWindowId !== null) {
@@ -115,7 +142,8 @@ async function reconcileTabs() {
           sortOrder: t.index,
           status: "open",
           browserTabId: t.id,
-          browserWindowId: w.id
+          browserWindowId: w.id,
+          active: t.active
         };
       } else {
         tabNode.status = "open";
@@ -124,6 +152,7 @@ async function reconcileTabs() {
         tabNode.favIconUrl = t.favIconUrl || tabNode.favIconUrl;
         tabNode.updatedAt = now;
         tabNode.parentId = winIdStr;
+        tabNode.active = t.active;
       }
       nodesToSave.push(tabNode);
     }
@@ -167,12 +196,19 @@ async function reconcileTabs() {
   broadcastUpdate();
 }
 
+async function safeReconcile() {
+  if (pauseReconcile) return;
+  await reconcileTabs();
+}
+
 // Reconcile tree on major tab/window events
-chrome.tabs.onCreated.addListener(async () => await reconcileTabs());
-chrome.tabs.onRemoved.addListener(async () => await reconcileTabs());
-chrome.tabs.onUpdated.addListener(async () => await reconcileTabs());
-chrome.windows.onCreated.addListener(async () => await reconcileTabs());
-chrome.windows.onRemoved.addListener(async () => await reconcileTabs());
+chrome.tabs.onCreated.addListener(safeReconcile);
+chrome.tabs.onRemoved.addListener(safeReconcile);
+chrome.tabs.onUpdated.addListener(safeReconcile);
+chrome.tabs.onActivated.addListener(safeReconcile);
+chrome.windows.onCreated.addListener(safeReconcile);
+chrome.windows.onRemoved.addListener(safeReconcile);
+chrome.windows.onFocusChanged.addListener(safeReconcile);
 
 // Provide the initial sync on background startup as well.
-reconcileTabs();
+safeReconcile();
