@@ -11,7 +11,9 @@ function NodeItem({ node }: { node: TreeNode }) {
         await chrome.windows.update(node.browserWindowId, { focused: true });
         await chrome.tabs.update(node.browserTabId, { active: true });
       } else if (node.url && node.status !== 'open') {
-        chrome.tabs.create({ url: node.url });
+        await removeNode(node.id);
+        await chrome.tabs.create({ url: node.url });
+        window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
       }
     }
   };
@@ -27,9 +29,12 @@ function NodeItem({ node }: { node: TreeNode }) {
     e.stopPropagation();
     try {
       await removeNode(node.id);
-      if (typeof chrome !== 'undefined' && chrome.runtime) {
-        chrome.runtime.sendMessage({ type: "TREE_UPDATED" }).catch(err => console.log(err));
+      if (node.status === 'open' && node.browserTabId) {
+        if (typeof chrome !== 'undefined' && chrome.tabs) {
+          chrome.tabs.remove(node.browserTabId).catch(() => {});
+        }
       }
+      window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
     } catch(err) {
       console.error(err);
     }
@@ -114,6 +119,9 @@ function App() {
 
     loadTree();
 
+    const refreshListener = () => loadTree();
+    window.addEventListener('REFRESH_TREE', refreshListener);
+
     if (typeof chrome !== 'undefined' && chrome.runtime) {
       const listener = (msg: any) => {
         if (msg.type === "TREE_UPDATED") {
@@ -122,7 +130,10 @@ function App() {
       };
       
       chrome.runtime.onMessage.addListener(listener);
-      return () => chrome.runtime.onMessage.removeListener(listener);
+      return () => {
+        chrome.runtime.onMessage.removeListener(listener);
+        window.removeEventListener('REFRESH_TREE', refreshListener);
+      };
     } else {
       // Mock data for local Vite preview unattached to extension
       setTreeData([
@@ -138,10 +149,11 @@ function App() {
           sortOrder: 0,
           children: [
             { id: 'tab-1', type: 'tab', title: 'Google', url: 'https://google.com', status: 'open', parentId: "win-1", childIds: [], createdAt: 0, updatedAt: 0, sortOrder: 0, children: [] },
-            { id: 'tab-2', type: 'tab', title: 'GitHub', url: 'https://github.com', status: 'saved', parentId: "win-1", childIds: [], createdAt: 0, updatedAt: 0, sortOrder: 1, children: [] },
+            { id: 'tab-2', type: 'tab', title: 'GitHub', url: 'https://github.com', status: 'saved', parentId: "win-1", childIds: [], createdAt: 0, updatedAt: 0, sortOrder: 1 }
           ]
         }
       ]);
+      return () => window.removeEventListener('REFRESH_TREE', refreshListener);
     }
   }, []);
 
