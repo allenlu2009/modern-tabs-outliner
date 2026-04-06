@@ -99,6 +99,7 @@ async function reconcileTabs() {
         nodesToSave.push(node);
       } else if (node.type === "tab" && node.browserTabId && !activeTabIds.has(node.browserTabId)) {
         node.status = "saved";
+        node.active = false;
         nodesToSave.push(node);
       }
     }
@@ -163,13 +164,28 @@ async function reconcileTabs() {
       nodesToSave.push(tabNode);
     }
     
-    // Safely append new tabs without overwriting the historical saved ones
-    const finalChildIds = [...(winNode.childIds || [])];
-    for (const id of activeTabIds) {
-      if (!finalChildIds.includes(id)) {
-        finalChildIds.push(id);
+    // Seamless Positional Weave Algorithm
+    // Matches live Chrome tab order into existing saved tree slots.
+    const finalChildIds: string[] = [];
+    const activeTabsToInsert = [...activeTabIds]; // Consume this array
+    
+    for (const oldId of (winNode.childIds || [])) {
+      if (activeTabIds.includes(oldId)) {
+         // This is a slot previously occupied by an open tab. We drop the NEXT structurally ordered Chrome tab here.
+         if (activeTabsToInsert.length > 0) {
+             finalChildIds.push(activeTabsToInsert.shift()!);
+         }
+      } else {
+         // It's a saved tab. Leave it precisely where it is.
+         finalChildIds.push(oldId);
       }
     }
+    
+    // Append any newly spawned tabs that didn't have historical slots
+    for (const remainingId of activeTabsToInsert) {
+      finalChildIds.push(remainingId);
+    }
+    
     winNode.childIds = finalChildIds;
     nodesToSave.push(winNode);
   }
