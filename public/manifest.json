@@ -3,6 +3,11 @@
   "name": "Modern Tabs Outliner",
   "version": "1.0.0",
   "description": "A modern tabs outliner for Chrome and Edge.",
+  "icons": {
+    "16": "favicon.svg",
+    "48": "favicon.svg",
+    "128": "favicon.svg"
+  },
   "permissions": [
     "tabs",
     "windows",
@@ -16,6 +21,11 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Open Tabs Outliner"
+    "default_title": "Open Tabs Outliner",
+    "default_icon": {
+      "16": "favicon.svg",
+      "48": "favicon.svg",
+      "128": "favicon.svg"
+    }
   }
 }

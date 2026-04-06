@@ -1,28 +1,16 @@
 import { useEffect, useState } from 'react';
 import './App.css';
-
-interface TreeNode {
-  id: string;
-  tabId?: number;
-  windowId?: number;
-  type: 'window' | 'tab' | 'group';
-  title: string;
-  url?: string;
-  favIconUrl?: string;
-  children: TreeNode[];
-  isOpen: boolean;
-  isCollapsed?: boolean;
-}
-
+import type { TreeNode } from './types';
+import { getAllNodes } from './storage';
 function NodeItem({ node }: { node: TreeNode }) {
-  const [collapsed, setCollapsed] = useState(!!node.isCollapsed);
+  const [collapsed, setCollapsed] = useState(!!node.collapsed);
 
   const focusTab = async () => {
     if (typeof chrome !== 'undefined' && chrome.windows) {
-      if (node.tabId && node.windowId && node.isOpen) {
-        await chrome.windows.update(node.windowId, { focused: true });
-        await chrome.tabs.update(node.tabId, { active: true });
-      } else if (node.url && !node.isOpen) {
+      if (node.browserTabId && node.browserWindowId && node.status === 'open') {
+        await chrome.windows.update(node.browserWindowId, { focused: true });
+        await chrome.tabs.update(node.browserTabId, { active: true });
+      } else if (node.url && node.status !== 'open') {
         chrome.tabs.create({ url: node.url });
       }
     }
@@ -30,27 +18,38 @@ function NodeItem({ node }: { node: TreeNode }) {
 
   const closeTab = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (typeof chrome !== 'undefined' && chrome.tabs && node.tabId) {
-      chrome.tabs.remove(node.tabId);
+    if (typeof chrome !== 'undefined' && chrome.tabs && node.browserTabId) {
+      chrome.tabs.remove(node.browserTabId);
     }
+  };
+
+  const removeNodeBtn = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // To be implemented: actual removeNode(node.id) from indexedDB
+    console.log("Remove node clicked", node.id);
   };
 
   return (
     <div className="tree-node">
       {node.type === 'window' ? (
         <div className="window-header" onClick={() => setCollapsed(!collapsed)}>
-          {collapsed ? '▶ ' : '▼ '} {node.title}
+          {collapsed ? '▶ ' : '▼ '} {node.title} 
+          {node.status !== 'open' && <span className="status-badge">[{node.status}]</span>}
         </div>
       ) : (
         <div 
-          className={`node-content ${!node.isOpen ? 'closed-tab' : ''}`}
+          className={`node-content ${node.status !== 'open' ? 'closed-tab' : ''}`}
           onClick={focusTab}
         >
           {node.favIconUrl && <img src={node.favIconUrl} className="favicon" alt="icon" />}
           <div className="node-title" title={node.title}>{node.title}</div>
           <div className="node-actions">
-            {node.isOpen && (
+            {node.status === 'open' && (
               <button className="btn-icon" onClick={closeTab} title="Close Tab">⨯</button>
+            )}
+            <button className="btn-icon" onClick={removeNodeBtn} title="Remove Node">🗑️</button>
+            {node.status !== 'open' && (
+              <span className="status-label">{node.status}</span>
             )}
           </div>
         </div>
@@ -71,21 +70,56 @@ function App() {
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
 
   useEffect(() => {
-    // Load initial data
-    if (typeof chrome !== 'undefined' && chrome.storage) {
-      chrome.storage.local.get('treeData', (res) => {
-        if (res.treeData) setTreeData(res.treeData);
-      });
+    const loadTree = async () => {
+      try {
+        const flatNodes = await getAllNodes();
+        const nodeMap = new Map<string, TreeNode>();
+        
+        flatNodes.forEach(node => {
+          nodeMap.set(node.id, { ...node, children: [] });
+        });
 
-      // Listen for updates from background worker
-      const listener = (changes: any, areaName: string) => {
-        if (areaName === 'local' && changes.treeData) {
-          setTreeData(changes.treeData.newValue);
+        // Hydrate
+        let rootNodes: TreeNode[] = [];
+        
+        flatNodes.forEach(node => {
+          const hydratedNode = nodeMap.get(node.id)!;
+          if (node.id === "root" || node.parentId === null) {
+            rootNodes.push(hydratedNode);
+          } else {
+            const parent = nodeMap.get(node.parentId);
+            if (parent && parent.children) {
+              parent.children.push(hydratedNode);
+            } else {
+               // Orphand, add to root
+               rootNodes.push(hydratedNode);
+            }
+          }
+        });
+
+        // The root itself is what we want its children of mostly
+        const root = nodeMap.get("root");
+        if (root && root.children) {
+          setTreeData(root.children);
+        } else {
+          setTreeData(rootNodes.filter(n => n.id !== "root"));
+        }
+      } catch (e) {
+        console.error("Failed to load tree from IndexedDB", e);
+      }
+    };
+
+    loadTree();
+
+    if (typeof chrome !== 'undefined' && chrome.runtime) {
+      const listener = (msg: any) => {
+        if (msg.type === "TREE_UPDATED") {
+          loadTree();
         }
       };
       
-      chrome.storage.onChanged.addListener(listener);
-      return () => chrome.storage.onChanged.removeListener(listener);
+      chrome.runtime.onMessage.addListener(listener);
+      return () => chrome.runtime.onMessage.removeListener(listener);
     } else {
       // Mock data for local Vite preview unattached to extension
       setTreeData([
@@ -93,10 +127,15 @@ function App() {
           id: 'win-1',
           type: 'window',
           title: 'Main Window',
-          isOpen: true,
+          status: 'open',
+          parentId: "root",
+          childIds: ["tab-1", "tab-2"],
+          createdAt: 0,
+          updatedAt: 0,
+          sortOrder: 0,
           children: [
-            { id: 'tab-1', type: 'tab', title: 'Google', url: 'https://google.com', isOpen: true, children: [] },
-            { id: 'tab-2', type: 'tab', title: 'GitHub', url: 'https://github.com', isOpen: false, children: [] },
+            { id: 'tab-1', type: 'tab', title: 'Google', url: 'https://google.com', status: 'open', parentId: "win-1", childIds: [], createdAt: 0, updatedAt: 0, sortOrder: 0, children: [] },
+            { id: 'tab-2', type: 'tab', title: 'GitHub', url: 'https://github.com', status: 'saved', parentId: "win-1", childIds: [], createdAt: 0, updatedAt: 0, sortOrder: 1, children: [] },
           ]
         }
       ]);

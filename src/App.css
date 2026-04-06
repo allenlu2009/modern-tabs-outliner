@@ -33,20 +33,22 @@ body {
 .outliner-container {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .tree-node {
   display: flex;
   flex-direction: column;
-  margin-left: 16px;
+  margin-left: 12px;
   position: relative;
 }
 
 .tree-node::before {
   content: '';
   position: absolute;
-  left: -12px;
+  left: -8px;
   top: 0;
   bottom: 0;
   width: 1px;
@@ -56,21 +58,20 @@ body {
 .node-content {
   display: flex;
   align-items: center;
-  padding: 8px 12px;
-  background-color: var(--item-bg);
-  border: 1px solid var(--item-border);
-  border-radius: 8px;
-  margin-bottom: 6px;
+  padding: 4px 8px;
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  margin-bottom: 2px;
   cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: all 0.1s ease;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .node-content:hover {
   background-color: var(--item-hover);
-  transform: translateX(4px);
-  border-color: var(--accent);
-  box-shadow: 0 4px 12px var(--accent-glow);
+  border-color: var(--item-border);
 }
 
 .node-content.closed-tab {
@@ -81,26 +82,35 @@ body {
 .favicon {
   width: 16px;
   height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  flex-shrink: 0;
+  object-fit: contain;
   margin-right: 12px;
   border-radius: 2px;
 }
 
 .node-title {
-  flex: 1;
+  flex: 1 1 auto;
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-weight: 500;
+  font-weight: 400;
+  min-width: 0;
 }
 
 .node-actions {
-  display: none;
-  gap: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.1s;
+  flex-shrink: 0;
+  align-items: center;
 }
 
 .node-content:hover .node-actions {
-  display: flex;
+  opacity: 1;
 }
 
 .btn-icon {
@@ -108,9 +118,13 @@ body {
   border: none;
   color: var(--text-color);
   cursor: pointer;
-  opacity: 0.5;
-  padding: 4px;
+  opacity: 0.6;
+  padding: 2px 6px;
   border-radius: 4px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .btn-icon:hover {
