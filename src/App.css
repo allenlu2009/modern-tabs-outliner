@@ -152,10 +152,10 @@ body {
   background-color: rgba(0,0,0,0.1);
 }
 
-.window-header {
-  font-size: 12px;
+.window-header, .group-header {
+  font-size: 11px;
   font-weight: 600;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   margin-top: 4px;
   color: var(--accent);
   text-transform: uppercase;
@@ -163,11 +163,64 @@ body {
   cursor: pointer;
   display: flex;
   align-items: center;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.1s;
+}
+
+.window-header:hover, .group-header:hover {
+  background-color: var(--item-hover);
+}
+
+.collapser {
+  width: 14px;
+  display: inline-block;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.node-icon {
+  margin-right: 6px;
+  font-size: 14px;
+}
+
+.group-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inline-edit input {
+  background: var(--bg-color);
+  border: 1px solid var(--accent);
+  color: var(--text-color);
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  width: 100%;
+  outline: none;
+}
+
+.add-group-btn {
+  margin-left: auto;
+  font-weight: bold;
+}
+
+.status-badge {
+  font-size: 9px;
+  background: var(--item-border);
+  padding: 1px 4px;
+  border-radius: 4px;
+  margin-left: 6px;
+  opacity: 0.8;
 }
 
 .child-count {
   margin-left: 6px;
   font-size: 11px;
   color: var(--text-color);
-  opacity: 0.7;
+  opacity: 0.5;
+  font-weight: normal;
+  text-transform: none;
 }

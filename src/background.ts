@@ -1,6 +1,6 @@
 import type { BaseNode } from "./types";
 import { putNodes, getAllNodes, putNode, removeNode, clearAllNodes } from "./storage";
-import { positionalWeave, calculateRestoreIndex } from "./utils";
+import { positionalWeave, calculateRestoreIndex, generateId } from "./utils";
 
 let outlinerWindowId: number | null = null;
 let pauseReconcile = false;
@@ -121,10 +121,6 @@ async function reconcileTabs() {
   // Create lookups to securely match stable nodes across sessions
   const winByBrowserId = new Map(existingNodes.filter(n => n.type === 'window' && n.browserWindowId).map(n => [n.browserWindowId, n]));
   const tabByBrowserId = new Map(existingNodes.filter(n => n.type === 'tab' && n.browserTabId).map(n => [n.browserTabId, n]));
-
-  function generateId() {
-    return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
-  }
 
   // 2. Mark previously "open" nodes that no longer exist as "crashed" or "saved"
   const nodesToRemove = new Set<string>();

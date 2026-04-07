@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react';
 import './App.css';
 import type { TreeNode } from './types';
-import { getAllNodes, removeNode } from './storage';
+import { getAllNodes, removeNode, putNode, putNodes } from './storage';
+import { generateId } from './utils';
+
 function NodeItem({ node }: { node: TreeNode }) {
   const [collapsed, setCollapsed] = useState(!!node.collapsed);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(node.title || '');
 
   const focusTab = async () => {
     if (typeof chrome !== 'undefined' && chrome.windows) {
@@ -45,12 +49,49 @@ function NodeItem({ node }: { node: TreeNode }) {
     }
   };
 
+  const handleRename = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editTitle.trim() === '') return;
+    try {
+      const updatedNode = { ...node, title: editTitle, updatedAt: Date.now() };
+      delete (updatedNode as any).children; // Don't save hydrated children
+      await putNode(updatedNode);
+      setIsEditing(false);
+      window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+    } catch(err) {
+      console.error(err);
+    }
+  };
+
   return (
     <div className="tree-node">
-      {node.type === 'window' ? (
-        <div className="window-header" onClick={() => setCollapsed(!collapsed)}>
-          {collapsed ? '▶ ' : '▼ '} {node.title} {collapsed && node.children && <span className="child-count">({node.children.length})</span>}
-          {node.status !== 'open' && <span className="status-badge">[{node.status}]</span>}
+      {node.type === 'window' || node.type === 'group' ? (
+        <div className="group-header" onClick={() => setCollapsed(!collapsed)}>
+          <span className="collapser">{collapsed ? '▶ ' : '▼ '}</span>
+          <span className="node-icon">{node.type === 'window' ? '🪟' : '📁'}</span>
+          {isEditing ? (
+            <form onSubmit={handleRename} className="inline-edit" onClick={(e) => e.stopPropagation()}>
+              <input 
+                autoFocus 
+                value={editTitle} 
+                onChange={(e) => setEditTitle(e.target.value)}
+                onBlur={handleRename}
+              />
+            </form>
+          ) : (
+            <span 
+              className="group-title" 
+              onDoubleClick={(e) => { e.stopPropagation(); setIsEditing(true); }}
+            >
+              {node.title} {node.type === 'window' && node.status !== 'open' && <span className="status-badge">[{node.status}]</span>}
+              {collapsed && node.children && <span className="child-count">({node.children.length})</span>}
+            </span>
+          )}
+          <div className="node-actions group-actions">
+            {node.type === 'group' && (
+              <button className="btn-icon" onClick={removeNodeBtn} title="Remove Group">🗑️</button>
+            )}
+          </div>
         </div>
       ) : (
         <div 
@@ -81,6 +122,35 @@ function NodeItem({ node }: { node: TreeNode }) {
 
 function App() {
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
+
+  const addGroup = async () => {
+    try {
+      const now = Date.now();
+      const newGroup = {
+        id: `group-${generateId()}`,
+        type: 'group' as const,
+        parentId: 'root',
+        childIds: [],
+        title: 'New Group',
+        createdAt: now,
+        updatedAt: now,
+        sortOrder: 0
+      };
+      
+      const nodes = await getAllNodes();
+      const rootNode = nodes.find(n => n.id === 'root');
+      if (rootNode) {
+        rootNode.childIds.unshift(newGroup.id);
+        await putNodes([newGroup, rootNode]);
+      } else {
+        await putNode(newGroup);
+      }
+      
+      window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   useEffect(() => {
     const loadTree = async () => {
@@ -151,23 +221,7 @@ function App() {
       };
     } else {
       // Mock data for local Vite preview unattached to extension
-      setTreeData([
-        {
-          id: 'win-1',
-          type: 'window',
-          title: 'Main Window',
-          status: 'open',
-          parentId: "root",
-          childIds: ["tab-1", "tab-2"],
-          createdAt: 0,
-          updatedAt: 0,
-          sortOrder: 0,
-          children: [
-            { id: 'tab-1', type: 'tab', title: 'Google', url: 'https://google.com', status: 'open', parentId: "win-1", childIds: [], createdAt: 0, updatedAt: 0, sortOrder: 0, children: [] },
-            { id: 'tab-2', type: 'tab', title: 'GitHub', url: 'https://github.com', status: 'saved', parentId: "win-1", childIds: [], createdAt: 0, updatedAt: 0, sortOrder: 1 }
-          ]
-        }
-      ]);
+      // ... handled by storage logic mostly now
       return () => window.removeEventListener('REFRESH_TREE', refreshListener);
     }
   }, []);
@@ -176,6 +230,7 @@ function App() {
     <div className="outliner-container">
       <div className="session-root">
         <span className="root-icon">🌐</span> Current Session
+        <button className="btn-icon add-group-btn" onClick={addGroup} title="Add Group">📁+</button>
       </div>
       {treeData.map(node => (
         <NodeItem key={node.id} node={node} />
