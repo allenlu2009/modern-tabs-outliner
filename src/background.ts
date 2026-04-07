@@ -1,5 +1,6 @@
 import type { BaseNode } from "./types";
 import { putNodes, getAllNodes, putNode, removeNode, clearAllNodes } from "./storage";
+import { positionalWeave } from "./utils";
 
 let outlinerWindowId: number | null = null;
 let pauseReconcile = false;
@@ -182,32 +183,8 @@ async function reconcileTabs() {
       nodesToSave.push(tabNode);
     }
     
-    // Seamless Positional Weave Algorithm
-    // Matches live Chrome tab order into existing saved tree slots.
-    const finalChildIds: string[] = [];
-    const activeTabsToInsert = [...activeTabIds]; // Consume this array
-    
-    for (const oldId of (winNode.childIds || [])) {
-      if (nodesToRemove.has(oldId)) {
-         continue; // Purge native closed tabs completely from hierarchy!
-      }
-      if (activeTabIds.includes(oldId)) {
-         // This is a slot previously occupied by an open tab. We drop the NEXT structurally ordered Chrome tab here.
-         if (activeTabsToInsert.length > 0) {
-             finalChildIds.push(activeTabsToInsert.shift()!);
-         }
-      } else {
-         // It's a saved tab. Leave it precisely where it is.
-         finalChildIds.push(oldId);
-      }
-    }
-    
-    // Append any newly spawned tabs that didn't have historical slots
-    for (const remainingId of activeTabsToInsert) {
-      finalChildIds.push(remainingId);
-    }
-    
-    winNode.childIds = finalChildIds;
+    // Seamless Positional Weave Algorithm via unit-tested utility
+    winNode.childIds = positionalWeave(winNode.childIds || [], activeTabIds, nodesToRemove);
     nodesToSave.push(winNode);
   }
 

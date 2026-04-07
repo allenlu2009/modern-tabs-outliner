@@ -1,9 +1,15 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
 
 // https://vite.dev/config/
 export default defineConfig({
+  test: {
+    environment: 'happy-dom',
+    globals: true,
+    setupFiles: ['./tests/setup.ts'],
+  },
   plugins: [react()],
   build: {
     rollupOptions: {
