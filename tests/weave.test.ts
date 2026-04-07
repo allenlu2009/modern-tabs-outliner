@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { positionalWeave } from '../src/utils';
+import { positionalWeave, calculateRestoreIndex } from '../src/utils';
+import type { BaseNode } from '../src/types';
 
 describe('positionalWeave algorithm', () => {
   it('preserves saved tabs while injecting newly ordered physical tabs', () => {
@@ -36,5 +37,41 @@ describe('positionalWeave algorithm', () => {
     const output = positionalWeave(oldChildIds, activeTabIds, nodesToRemove);
 
     expect(output).toEqual(['active-1', 'new-tab-2']);
+  });
+});
+
+describe('calculateRestoreIndex logic offset', () => {
+  it('correctly calculates the physical index for restored tabs based on open precedents', () => {
+    // Simulated Tree Sequence:
+    // 0: Tab A (open) -> Physical Index 0
+    // 1: Tab B (saved) -> (skipped)
+    // 2: Tab C (open) -> Physical Index 1
+    // 3: Tab TARGET (saved) -> Expected Physical Restore Index 2
+    // 4: Tab D (open) -> Physical Index 2 (will be shifted to 3)
+
+    const parentChildIds = ['tab-a', 'tab-b', 'tab-c', 'tab-target', 'tab-d'];
+    const nodeMap = new Map<string, BaseNode>([
+      ['tab-a', { id: 'tab-a', status: 'open' } as BaseNode],
+      ['tab-b', { id: 'tab-b', status: 'saved' } as BaseNode],
+      ['tab-c', { id: 'tab-c', status: 'open' } as BaseNode],
+      ['tab-target', { id: 'tab-target', status: 'saved' } as BaseNode],
+      ['tab-d', { id: 'tab-d', status: 'open' } as BaseNode]
+    ]);
+
+    const resultIndex = calculateRestoreIndex('tab-target', parentChildIds, nodeMap);
+    
+    // There are EXACTLY two 'open' tabs prior to 'tab-target'
+    expect(resultIndex).toBe(2);
+  });
+
+  it('returns exactly 0 if restoring to the very top of a window', () => {
+    const parentChildIds = ['tab-target', 'tab-1'];
+    const nodeMap = new Map<string, BaseNode>([
+      ['tab-target', { id: 'tab-target', status: 'saved' } as BaseNode],
+      ['tab-1', { id: 'tab-1', status: 'open' } as BaseNode]
+    ]);
+
+    const resultIndex = calculateRestoreIndex('tab-target', parentChildIds, nodeMap);
+    expect(resultIndex).toBe(0);
   });
 });

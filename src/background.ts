@@ -1,6 +1,6 @@
 import type { BaseNode } from "./types";
 import { putNodes, getAllNodes, putNode, removeNode, clearAllNodes } from "./storage";
-import { positionalWeave } from "./utils";
+import { positionalWeave, calculateRestoreIndex } from "./utils";
 
 let outlinerWindowId: number | null = null;
 let pauseReconcile = false;
@@ -13,25 +13,50 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
   if (msg.type === "RESTORE_NODE") {
     pauseReconcile = true;
-    chrome.tabs.create({ url: msg.url, active: true }, async (t) => {
+    (async () => {
       try {
         const nodes = await getAllNodes();
         const nodeMap = new Map(nodes.map(n => [n.id, n]));
         const node = nodeMap.get(msg.nodeId);
-        if (node) {
-          node.browserTabId = t.id;
-          node.browserWindowId = t.windowId;
-          node.status = "open";
-          node.active = true;
-          await putNode(node);
+        if (!node) throw new Error("Restoring node not found");
+        
+        // Ensure browser physical window is still available, fallback to any normal window
+        let targetWindowId = node.browserWindowId;
+        const openWindows = await chrome.windows.getAll();
+        const isWinOpen = openWindows.some(w => w.id === targetWindowId);
+        if (!isWinOpen) {
+          targetWindowId = openWindows.find(w => w.type === 'normal')?.id;
         }
+
+        // Deep Index Calculation ensures strict outliner insertion without dropping back to end-of-list defaults.
+        let calculatedIndex: number | undefined = undefined;
+        if (node.parentId) {
+          const parent = nodeMap.get(node.parentId);
+          if (parent && parent.childIds) {
+            calculatedIndex = calculateRestoreIndex(node.id, parent.childIds, nodeMap);
+          }
+        }
+
+        chrome.tabs.create({ url: msg.url, windowId: targetWindowId, index: calculatedIndex, active: true }, async (t) => {
+          try {
+            node.browserTabId = t.id;
+            node.browserWindowId = t.windowId;
+            node.status = "open";
+            node.active = true;
+            await putNode(node);
+          } catch (err) {
+            console.error(err);
+          } finally {
+            pauseReconcile = false;
+            safeReconcile();
+          }
+        });
       } catch (err) {
-        console.error(err);
-      } finally {
-        pauseReconcile = false;
-        safeReconcile();
+         console.error(err);
+         pauseReconcile = false;
+         safeReconcile();
       }
-    });
+    })();
     return false;
   }
 });
