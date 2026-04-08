@@ -27,21 +27,57 @@ import { CSS } from '@dnd-kit/utilities';
 // Position is resolved only on drop via onDragEnd logic.
 const noopSortingStrategy: SortingStrategy = () => null;
 
+/**
+ * Renders the correct icon for a tab:
+ * - Real favicon image (with error fallback)
+ * - Red PDF badge when URL ends in .pdf and no favicon exists
+ * - Nothing otherwise
+ */
+function TabIcon({ url, favIconUrl }: { url?: string; favIconUrl?: string }) {
+  const validFavicon =
+    favIconUrl &&
+    !favIconUrl.startsWith('chrome://') &&
+    !favIconUrl.startsWith('chrome-extension://');
+
+  if (validFavicon) {
+    return (
+      <img
+        src={favIconUrl}
+        className="favicon"
+        alt=""
+        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+      />
+    );
+  }
+
+  const lowerUrl = url?.toLowerCase() ?? '';
+  const isPdf =
+    lowerUrl.endsWith('.pdf') ||
+    lowerUrl.includes('.pdf?') ||
+    lowerUrl.includes('.pdf#') ||
+    lowerUrl.includes('/pdf') && lowerUrl.includes('file://');
+
+  if (isPdf) {
+    return <span className="file-type-icon pdf-icon" title="PDF file">PDF</span>;
+  }
+
+  return null;
+}
+
 function NodeItem({ node, depth = 0, isDragActive = false }: { node: TreeNode; depth?: number; isDragActive?: boolean }) {
   const {
     attributes,
     listeners,
     setNodeRef,
     transform,
-    transition,
     isDragging,
   } = useSortable({ id: node.id });
 
   const style = {
     // When any drag is active, freeze all items except the one being dragged.
-    // This prevents the "cramping" visual glitch in sibling window groups.
+    // Disabling transition entirely prevents the rubber-band spring-back on drop.
     transform: isDragging ? undefined : (isDragActive ? 'none' : CSS.Transform.toString(transform)),
-    transition: isDragActive ? 'none' : transition,
+    transition: 'none', // No CSS transition at all — eliminates rubber-band bounce on drop
     opacity: isDragging ? 0 : 1,
   };
 
@@ -191,7 +227,7 @@ function NodeItem({ node, depth = 0, isDragActive = false }: { node: TreeNode; d
           onClick={focusTab}
         >
           <span className="drag-handle" {...attributes} {...listeners}>⣿</span>
-          {node.favIconUrl && <img src={node.favIconUrl} className="favicon" alt="icon" />}
+          <TabIcon url={node.url} favIconUrl={node.favIconUrl} />
           <div className={`node-title ${node.active ? 'active-tab' : ''}`} title={node.title}>{node.title}</div>
           <div className="node-actions">
             {node.status === 'open' && (
@@ -488,10 +524,13 @@ function App() {
           ))}
         </SortableContext>
 
-        <DragOverlay adjustScale={false}>
+        <DragOverlay
+          adjustScale={false}
+          dropAnimation={null}  // Prevents the rubber-band snap-back animation on drop
+        >
           {activeNode ? (
             <div className="drag-overlay-item">
-              {activeNode.favIconUrl && <img src={activeNode.favIconUrl} className="favicon" alt="" />}
+              <TabIcon url={activeNode.url} favIconUrl={activeNode.favIconUrl} />
               <span>{activeNode.title}</span>
             </div>
           ) : null}

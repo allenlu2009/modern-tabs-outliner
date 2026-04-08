@@ -106,6 +106,27 @@ body {
   border-radius: 2px;
 }
 
+.file-type-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 14px;
+  min-width: 20px;
+  border-radius: 2px;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  flex-shrink: 0;
+  margin-right: 6px;
+  user-select: none;
+}
+
+.pdf-icon {
+  background-color: #cc1f1a;
+  color: #fff;
+}
+
 .node-title {
   flex: 1 1 auto;
   font-size: 11px;
