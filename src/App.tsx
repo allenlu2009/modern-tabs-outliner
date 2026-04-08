@@ -19,9 +19,15 @@ import {
   sortableKeyboardCoordinates,
   useSortable,
 } from '@dnd-kit/sortable';
+import type { SortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
-function NodeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
+// A no-op sorting strategy: items do NOT visually shift when dragging.
+// This eliminates phantom cramping in adjacent window groups.
+// Position is resolved only on drop via onDragEnd logic.
+const noopSortingStrategy: SortingStrategy = () => null;
+
+function NodeItem({ node, depth = 0, isDragActive = false }: { node: TreeNode; depth?: number; isDragActive?: boolean }) {
   const {
     attributes,
     listeners,
@@ -32,9 +38,11 @@ function NodeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
   } = useSortable({ id: node.id });
 
   const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.3 : 1,
+    // When any drag is active, freeze all items except the one being dragged.
+    // This prevents the "cramping" visual glitch in sibling window groups.
+    transform: isDragging ? undefined : (isDragActive ? 'none' : CSS.Transform.toString(transform)),
+    transition: isDragActive ? 'none' : transition,
+    opacity: isDragging ? 0 : 1,
   };
 
   const [collapsed, setCollapsed] = useState(!!node.collapsed);
@@ -66,13 +74,63 @@ function NodeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
     }
   };
 
+  // Close entire window (saves tabs, closes in Chrome, keeps nodes as "saved")
+  const closeWindow = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!node.browserWindowId || typeof chrome === 'undefined') return;
+    if (node.children) {
+      for (const child of node.children) {
+        if (child.status === 'open' && child.browserTabId) {
+          chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: child.id }).catch(() => {});
+        }
+      }
+    }
+    chrome.windows.remove(node.browserWindowId).catch(() => {});
+  };
+
+  // Remove entire window node + all children from DB (and close in Chrome)
+  const removeWindowNodeBtn = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      if (node.children) {
+        for (const child of node.children) {
+          await removeNode(child.id);
+          if (child.status === 'open' && child.browserTabId && typeof chrome !== 'undefined' && chrome.tabs) {
+            chrome.tabs.remove(child.browserTabId).catch(() => {});
+          }
+        }
+      }
+      await removeNode(node.id);
+      if (node.status === 'open' && node.browserWindowId && typeof chrome !== 'undefined' && chrome.windows) {
+        chrome.windows.remove(node.browserWindowId).catch(() => {});
+      }
+      window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+    } catch (err) { console.error(err); }
+  };
+
   const removeNodeBtn = async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
+      if (node.status === 'open' && node.browserTabId && typeof chrome !== 'undefined' && chrome.tabs) {
+        chrome.tabs.remove(node.browserTabId).catch(() => {});
+      }
+      // Load all nodes to check if parent window becomes empty after removal
+      const allNodes = await getAllNodes();
+      const parentNode = node.parentId ? allNodes.find(n => n.id === node.parentId) : null;
+
       await removeNode(node.id);
-      if (node.status === 'open' && node.browserTabId) {
-        if (typeof chrome !== 'undefined' && chrome.tabs) {
-          chrome.tabs.remove(node.browserTabId).catch(() => {});
+
+      // If parent window/group now has no more valid children, remove it too
+      if (parentNode && parentNode.type === 'window') {
+        const remainingValid = parentNode.childIds
+          .filter(cid => cid !== node.id)
+          .filter(cid => allNodes.some(n => n.id === cid));
+        if (remainingValid.length === 0) {
+          await removeNode(parentNode.id);
+          if (parentNode.status === 'open' && parentNode.browserWindowId
+              && typeof chrome !== 'undefined' && chrome.windows) {
+            chrome.windows.remove(parentNode.browserWindowId).catch(() => {});
+          }
         }
       }
       window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
@@ -121,9 +179,10 @@ function NodeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
             </span>
           )}
           <div className="node-actions group-actions">
-            {node.type === 'group' && (
-              <button className="btn-icon" onClick={removeNodeBtn} title="Remove Group">🗑️</button>
+            {node.type === 'window' && node.status === 'open' && (
+              <button className="btn-icon" onClick={closeWindow} title="Save & Close Window">⨯</button>
             )}
+            <button className="btn-icon" onClick={node.type === 'window' ? removeWindowNodeBtn : removeNodeBtn} title="Remove">🗑️</button>
           </div>
         </div>
       ) : (
@@ -147,7 +206,7 @@ function NodeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
         <div className="node-children">
           {/* No nested SortableContext — one flat context in App for cross-container support */}
           {node.children.map(child => (
-            <NodeItem key={child.id} node={child} depth={depth + 1} />
+            <NodeItem key={child.id} node={child} depth={depth + 1} isDragActive={isDragActive} />
           ))}
         </div>
       )}
@@ -357,6 +416,15 @@ function App() {
       }
       await putNodes(toPersist);
 
+      // Auto-remove old window if it's now empty after cross-parent move
+      if (!isSameParent && oldParent && oldParent.type === 'window' && oldParent.childIds.length === 0) {
+        await removeNode(oldParent.id);
+        if (oldParent.status === 'open' && oldParent.browserWindowId
+            && typeof chrome !== 'undefined' && chrome.windows) {
+          chrome.windows.remove(oldParent.browserWindowId).catch(() => {});
+        }
+      }
+
       // Chrome tab sync for live open tabs
       if (activeNode.type === 'tab' && activeNode.status === 'open' && activeNode.browserTabId) {
         if (newParent.type === 'window' && newParent.browserWindowId) {
@@ -413,10 +481,10 @@ function App() {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        {/* Single flat SortableContext — no strategy means no visual phantom shifts during drag */}
-        <SortableContext items={allNodeIds}>
+        // Single flat SortableContext — noopSortingStrategy stops phantom visual shifts
+        <SortableContext items={allNodeIds} strategy={noopSortingStrategy}>
           {treeData.map(node => (
-            <NodeItem key={node.id} node={node} />
+            <NodeItem key={node.id} node={node} isDragActive={activeId !== null} />
           ))}
         </SortableContext>
 

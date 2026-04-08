@@ -4,16 +4,12 @@ import type { BaseNode } from '../src/types';
 
 describe('positionalWeave algorithm', () => {
   it('preserves saved tabs while injecting newly ordered physical tabs', () => {
-    // Array simulating: Node 1 (Crashed/Saved), Node 2 (Physical Slot), Node 3 (Physical Slot), Node 4 (Saved)
     const oldChildIds = ['saved-1', 'active-a', 'active-b', 'saved-2'];
-    
-    // Simulate user locally swapping Tab B and Tab A in Chrome
     const activeTabIds = ['active-b', 'active-a'];
     const nodesToRemove = new Set<string>();
 
     const output = positionalWeave(oldChildIds, activeTabIds, nodesToRemove);
 
-    // The output MUST preserve saved-1 and saved-2 at outer boundaries, but swap active-b and active-a inwards
     expect(output).toEqual(['saved-1', 'active-b', 'active-a', 'saved-2']);
   });
 
@@ -24,13 +20,11 @@ describe('positionalWeave algorithm', () => {
 
     const output = positionalWeave(oldChildIds, activeTabIds, nodesToRemove);
 
-    // The algorithm drops 'dying-tab' seamlessly
     expect(output).toEqual(['saved-A', 'saved-B']);
   });
 
   it('appends exclusively new Chrome tabs to the end of the tree list', () => {
     const oldChildIds = ['active-1'];
-    // User opened a new tab natively
     const activeTabIds = ['active-1', 'new-tab-2'];
     const nodesToRemove = new Set<string>();
 
@@ -42,13 +36,6 @@ describe('positionalWeave algorithm', () => {
 
 describe('calculateRestoreIndex logic offset', () => {
   it('correctly calculates the physical index for restored tabs based on open precedents', () => {
-    // Simulated Tree Sequence:
-    // 0: Tab A (open) -> Physical Index 0
-    // 1: Tab B (saved) -> (skipped)
-    // 2: Tab C (open) -> Physical Index 1
-    // 3: Tab TARGET (saved) -> Expected Physical Restore Index 2
-    // 4: Tab D (open) -> Physical Index 2 (will be shifted to 3)
-
     const parentChildIds = ['tab-a', 'tab-b', 'tab-c', 'tab-target', 'tab-d'];
     const nodeMap = new Map<string, BaseNode>([
       ['tab-a', { id: 'tab-a', status: 'open' } as BaseNode],
@@ -59,8 +46,6 @@ describe('calculateRestoreIndex logic offset', () => {
     ]);
 
     const resultIndex = calculateRestoreIndex('tab-target', parentChildIds, nodeMap);
-    
-    // There are EXACTLY two 'open' tabs prior to 'tab-target'
     expect(resultIndex).toBe(2);
   });
 
@@ -73,5 +58,181 @@ describe('calculateRestoreIndex logic offset', () => {
 
     const resultIndex = calculateRestoreIndex('tab-target', parentChildIds, nodeMap);
     expect(resultIndex).toBe(0);
+  });
+});
+
+// ─── Drag-and-Drop tree mutation helpers ──────────────────────────────────────
+// These tests validate the pure data-structure logic behind handleDragEnd.
+// They mirror exactly what App.tsx does during a DND operation.
+
+function simulateDND(
+  nodes: BaseNode[],
+  activeId: string,
+  overId: string,
+  activeIndex: number,
+  overIndex: number
+): { nodes: BaseNode[]; movedToParent: string } {
+  const nodeMap = new Map<string, BaseNode>(
+    nodes.map(n => [n.id, { ...n, childIds: [...n.childIds] }])
+  );
+  const activeNode = nodeMap.get(activeId)!;
+  const overNode = nodeMap.get(overId)!;
+  const draggingDown = activeIndex < overIndex;
+
+  const oldParentId = activeNode.parentId || 'root';
+  const oldParent = nodeMap.get(oldParentId);
+
+  const dropIntoContainer = overNode.type === 'group';
+  const newParentId = dropIntoContainer ? overNode.id : (overNode.parentId || 'root');
+  const newParent = nodeMap.get(newParentId)!;
+  const isSameParent = oldParentId === newParentId;
+
+  let insertIndex = 0;
+  if (dropIntoContainer) {
+    if (oldParent) oldParent.childIds = oldParent.childIds.filter(id => id !== activeId);
+    insertIndex = 0;
+  } else if (isSameParent) {
+    oldParent!.childIds = oldParent!.childIds.filter(id => id !== activeId);
+    const overIdxAfter = newParent.childIds.indexOf(overId);
+    insertIndex = draggingDown
+      ? (overIdxAfter < 0 ? newParent.childIds.length : overIdxAfter + 1)
+      : (overIdxAfter < 0 ? 0 : overIdxAfter);
+  } else {
+    if (oldParent) oldParent.childIds = oldParent.childIds.filter(id => id !== activeId);
+    const idx = newParent.childIds.indexOf(overId);
+    insertIndex = idx < 0 ? newParent.childIds.length : idx;
+  }
+
+  newParent.childIds.splice(insertIndex, 0, activeId);
+  activeNode.parentId = newParentId;
+
+  return {
+    nodes: Array.from(nodeMap.values()),
+    movedToParent: newParentId,
+  };
+}
+
+describe('DND same-parent reorder', () => {
+  const makeWindow = (id: string, childIds: string[]): BaseNode => ({
+    id, type: 'window', status: 'open', parentId: 'root',
+    childIds, title: id, createdAt: 0, updatedAt: 0, sortOrder: 0,
+  });
+  const makeTab = (id: string, parentId: string): BaseNode => ({
+    id, type: 'tab', status: 'open', parentId,
+    childIds: [], title: id, createdAt: 0, updatedAt: 0, sortOrder: 0,
+  });
+
+  it('moves a tab DOWN by 1 when dragging past the next sibling', () => {
+    // Tabs in order: [A, B, C, D]  —  drag A (idx 0) past B (idx 1)
+    const win = makeWindow('win1', ['A', 'B', 'C', 'D']);
+    const nodes = [win, makeTab('A', 'win1'), makeTab('B', 'win1'), makeTab('C', 'win1'), makeTab('D', 'win1')];
+
+    const { nodes: result } = simulateDND(nodes, 'A', 'B', 0, 1);
+    const parent = result.find(n => n.id === 'win1')!;
+    expect(parent.childIds).toEqual(['B', 'A', 'C', 'D']);
+  });
+
+  it('moves a tab UP by 1 when dragging past the previous sibling', () => {
+    // Tabs in order: [A, B, C, D]  —  drag D (idx 3) past C (idx 2)
+    const win = makeWindow('win1', ['A', 'B', 'C', 'D']);
+    const nodes = [win, makeTab('A', 'win1'), makeTab('B', 'win1'), makeTab('C', 'win1'), makeTab('D', 'win1')];
+
+    const { nodes: result } = simulateDND(nodes, 'D', 'C', 3, 2);
+    const parent = result.find(n => n.id === 'win1')!;
+    expect(parent.childIds).toEqual(['A', 'B', 'D', 'C']);
+  });
+
+  it('moves a tab from the bottom to the very top', () => {
+    const win = makeWindow('win1', ['A', 'B', 'C', 'D']);
+    const nodes = [win, makeTab('A', 'win1'), makeTab('B', 'win1'), makeTab('C', 'win1'), makeTab('D', 'win1')];
+
+    const { nodes: result } = simulateDND(nodes, 'D', 'A', 3, 0);
+    const parent = result.find(n => n.id === 'win1')!;
+    expect(parent.childIds).toEqual(['D', 'A', 'B', 'C']);
+  });
+});
+
+describe('DND cross-window move', () => {
+  const makeWindow = (id: string, childIds: string[]): BaseNode => ({
+    id, type: 'window', status: 'open', parentId: 'root',
+    childIds, title: id, createdAt: 0, updatedAt: 0, sortOrder: 0,
+  });
+  const makeTab = (id: string, parentId: string): BaseNode => ({
+    id, type: 'tab', status: 'open', parentId,
+    childIds: [], title: id, createdAt: 0, updatedAt: 0, sortOrder: 0,
+  });
+
+  it('moves a tab from Window1 to Window2 at the correct position', () => {
+    // Window1: [A, B]  Window2: [C, D, E]  —  drag B near D (idx 1 in win2)
+    const win1 = makeWindow('win1', ['A', 'B']);
+    const win2 = makeWindow('win2', ['C', 'D', 'E']);
+    const nodes = [
+      win1, win2,
+      makeTab('A', 'win1'), makeTab('B', 'win1'),
+      makeTab('C', 'win2'), makeTab('D', 'win2'), makeTab('E', 'win2'),
+    ];
+
+    // activeIndex=1 (B is second in flat list), overIndex=4 (D is fifth)
+    const { nodes: result, movedToParent } = simulateDND(nodes, 'B', 'D', 1, 4);
+    expect(movedToParent).toBe('win2');
+
+    const parent1 = result.find(n => n.id === 'win1')!;
+    const parent2 = result.find(n => n.id === 'win2')!;
+    expect(parent1.childIds).toEqual(['A']);
+    expect(parent2.childIds).toEqual(['C', 'B', 'D', 'E']); // B inserted before D
+  });
+
+  it('removes old parent window from childIds when it becomes empty', () => {
+    // Window1 has only tab B. Move B to Window2.
+    const win1 = makeWindow('win1', ['B']);
+    const win2 = makeWindow('win2', ['C']);
+    const nodes = [win1, win2, makeTab('B', 'win1'), makeTab('C', 'win2')];
+
+    const { nodes: result } = simulateDND(nodes, 'B', 'C', 0, 1);
+    const parent1 = result.find(n => n.id === 'win1')!;
+    // Window1 should now have no children (caller should then delete it from DB)
+    expect(parent1.childIds).toEqual([]);
+  });
+});
+
+describe('zombie window prevention', () => {
+  it('detects that a window has no valid remaining children after tab removal', () => {
+    // Simulate the check done in removeNodeBtn
+    const allNodes: BaseNode[] = [
+      { id: 'win1', type: 'window', status: 'open', parentId: 'root',
+        childIds: ['tab-A'], title: 'Win1', createdAt: 0, updatedAt: 0, sortOrder: 0 },
+      { id: 'tab-A', type: 'tab', status: 'open', parentId: 'win1',
+        childIds: [], title: 'Tab A', createdAt: 0, updatedAt: 0, sortOrder: 0 },
+    ];
+
+    const removedId = 'tab-A';
+    const parentNode = allNodes.find(n => n.id === 'win1')!;
+    const remainingValid = parentNode.childIds
+      .filter(cid => cid !== removedId)
+      .filter(cid => allNodes.some(n => n.id === cid));
+
+    // After removing tab-A, window should have 0 valid children → should be auto-removed
+    expect(remainingValid.length).toBe(0);
+  });
+
+  it('does NOT remove a window that still has other valid tabs', () => {
+    const allNodes: BaseNode[] = [
+      { id: 'win1', type: 'window', status: 'open', parentId: 'root',
+        childIds: ['tab-A', 'tab-B'], title: 'Win1', createdAt: 0, updatedAt: 0, sortOrder: 0 },
+      { id: 'tab-A', type: 'tab', status: 'open', parentId: 'win1',
+        childIds: [], title: 'Tab A', createdAt: 0, updatedAt: 0, sortOrder: 0 },
+      { id: 'tab-B', type: 'tab', status: 'open', parentId: 'win1',
+        childIds: [], title: 'Tab B', createdAt: 0, updatedAt: 0, sortOrder: 0 },
+    ];
+
+    const removedId = 'tab-A';
+    const parentNode = allNodes.find(n => n.id === 'win1')!;
+    const remainingValid = parentNode.childIds
+      .filter(cid => cid !== removedId)
+      .filter(cid => allNodes.some(n => n.id === cid));
+
+    // tab-B still exists → do NOT remove window
+    expect(remainingValid.length).toBe(1);
+    expect(remainingValid).toContain('tab-B');
   });
 });
