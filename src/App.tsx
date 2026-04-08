@@ -87,7 +87,7 @@ function NodeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
     if (editTitle.trim() === '') return;
     try {
       const updatedNode = { ...node, title: editTitle, updatedAt: Date.now() };
-      delete (updatedNode as any).children; // Don't save hydrated children
+      delete (updatedNode as any).children;
       await putNode(updatedNode);
       setIsEditing(false);
       window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
@@ -105,16 +105,16 @@ function NodeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
           <span className="node-icon">{node.type === 'window' ? '🪟' : '📁'}</span>
           {isEditing ? (
             <form onSubmit={handleRename} className="inline-edit" onClick={(e) => e.stopPropagation()}>
-              <input 
-                autoFocus 
-                value={editTitle} 
+              <input
+                autoFocus
+                value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
                 onBlur={handleRename}
               />
             </form>
           ) : (
-            <span 
-              className="group-title" 
+            <span
+              className="group-title"
               onDoubleClick={(e) => { e.stopPropagation(); setIsEditing(true); }}
             >
               {node.title} {node.status && node.status !== 'open' && <span className="status-badge">[{node.status}]</span>}
@@ -128,7 +128,7 @@ function NodeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
           </div>
         </div>
       ) : (
-        <div 
+        <div
           className={`node-content ${node.status !== 'open' ? 'closed-tab' : ''}`}
           onClick={focusTab}
         >
@@ -143,14 +143,13 @@ function NodeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
           </div>
         </div>
       )}
-      
+
       {!collapsed && node.children && node.children.length > 0 && (
         <div className="node-children">
-          <SortableContext items={node.children.map(c => c.id)} strategy={verticalListSortingStrategy}>
-            {node.children.map(child => (
-              <NodeItem key={child.id} node={child} depth={depth + 1} />
-            ))}
-          </SortableContext>
+          {/* No nested SortableContext — one flat context in App for cross-container support */}
+          {node.children.map(child => (
+            <NodeItem key={child.id} node={child} depth={depth + 1} />
+          ))}
         </div>
       )}
     </div>
@@ -162,11 +161,29 @@ function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
 
   const sensors = useSensors(
-    useSensor(PointerSensor),
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 }, // Prevent accidental drags on clicks
+    }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     })
   );
+
+  // Collect ALL node IDs in flat DFS order for a single SortableContext.
+  // This is the key fix for cross-container (cross-window) drag-and-drop.
+  const allNodeIds = useMemo(() => {
+    const ids: string[] = [];
+    const collect = (nodes: TreeNode[]) => {
+      for (const n of nodes) {
+        ids.push(n.id);
+        if (n.children && n.children.length > 0) {
+          collect(n.children);
+        }
+      }
+    };
+    collect(treeData);
+    return ids;
+  }, [treeData]);
 
   const addGroup = async () => {
     try {
@@ -181,7 +198,7 @@ function App() {
         updatedAt: now,
         sortOrder: 0
       };
-      
+
       const nodes = await getAllNodes();
       const rootNode = nodes.find(n => n.id === 'root');
       if (rootNode) {
@@ -190,7 +207,7 @@ function App() {
       } else {
         await putNode(newGroup);
       }
-      
+
       window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
     } catch (err) {
       console.error(err);
@@ -201,13 +218,13 @@ function App() {
     try {
       const flatNodes = await getAllNodes();
       const nodeMap = new Map<string, TreeNode>();
-      
+
       flatNodes.forEach(node => {
         nodeMap.set(node.id, { ...node, children: [] });
       });
 
       let rootNodes: TreeNode[] = [];
-      
+
       flatNodes.forEach(node => {
         const hydratedNode = nodeMap.get(node.id)!;
         if (node.id === "root" || node.parentId === null) {
@@ -217,7 +234,7 @@ function App() {
           if (parent && parent.children) {
             parent.children.push(hydratedNode);
           } else {
-             rootNodes.push(hydratedNode);
+            rootNodes.push(hydratedNode);
           }
         }
       });
@@ -255,7 +272,7 @@ function App() {
           loadTree();
         }
       };
-      
+
       chrome.runtime.onMessage.addListener(listener);
       return () => {
         chrome.runtime.onMessage.removeListener(listener);
@@ -274,75 +291,106 @@ function App() {
     const { active, over } = event;
     setActiveId(null);
 
-    if (over && active.id !== over.id) {
-       try {
-         const nodes = await getAllNodes();
-         const nodeMap = new Map<string, BaseNode>(nodes.map(n => [n.id, n]));
-         const activeNode = nodeMap.get(active.id as string);
-         const overNode = nodeMap.get(over.id as string);
+    if (!over || active.id === over.id) return;
 
-         if (!activeNode || !overNode) return;
+    try {
+      const nodes = await getAllNodes();
+      // Deep-copy childIds arrays so we can mutate safely
+      const nodeMap = new Map<string, BaseNode>(
+        nodes.map(n => [n.id, { ...n, childIds: [...n.childIds] }])
+      );
 
-         // 1. Remove from old parent
-         if (activeNode.parentId) {
-           const oldParent = nodeMap.get(activeNode.parentId);
-           if (oldParent && oldParent.childIds) {
-             oldParent.childIds = oldParent.childIds.filter(id => id !== active.id);
-             await putNode(oldParent);
-           }
-         }
+      const activeNode = nodeMap.get(active.id as string);
+      const overNode = nodeMap.get(over.id as string);
+      if (!activeNode || !overNode) return;
 
-         let newParentId = overNode.parentId;
-         let newIndex = 0;
+      const oldParentId = activeNode.parentId || 'root';
+      const oldParent = nodeMap.get(oldParentId);
 
-         if (overNode.type === 'window' || overNode.type === 'group' || overNode.id === 'root') {
-            newParentId = overNode.id;
-            newIndex = 0; 
-         } else {
-            const overParentId = overNode.parentId || 'root';
-            newParentId = overParentId;
-            const overParent = nodeMap.get(overParentId);
-            if (overParent) {
-               const idx = overParent.childIds.indexOf(overNode.id);
-               newIndex = idx + 1;
-            }
-         }
+      // --- Determine new parent and insert index BEFORE any mutations ---
+      let newParentId: string;
+      let insertIndex: number;
 
-         if (activeNode.type === 'tab' && activeNode.status === 'open' && activeNode.browserTabId) {
-            const newParent = nodeMap.get(newParentId!);
-            if (newParent && newParent.type === 'window' && newParent.browserWindowId) {
-                chrome.runtime.sendMessage({ type: "TAB_MOVED_UI", tabId: activeNode.browserTabId, windowId: newParent.browserWindowId, index: newIndex });
-            } else if (newParent && newParent.type === 'group') {
-                activeNode.status = 'saved';
-                activeNode.active = false;
-                chrome.tabs.remove(activeNode.browserTabId).catch(() => {});
-                activeNode.browserTabId = undefined;
-            }
-         }
+      if (overNode.type === 'window' || overNode.type === 'group') {
+        // Dropping ON a container → prepend as first child
+        newParentId = overNode.id;
+        insertIndex = 0;
+      } else {
+        // Dropping ON a sibling → insert AT that sibling's current position
+        newParentId = overNode.parentId || 'root';
+        const overParent = nodeMap.get(newParentId);
+        const idx = overParent ? overParent.childIds.indexOf(overNode.id) : 0;
+        insertIndex = idx < 0 ? 0 : idx;
+      }
 
-         activeNode.parentId = newParentId;
-         const parentNode = nodeMap.get(newParentId!);
-         if (parentNode) {
-            parentNode.childIds.splice(newIndex, 0, activeNode.id);
-            await putNodes([activeNode, parentNode]);
-         }
+      // --- Step 1: Remove active from old parent ---
+      if (oldParent) {
+        oldParent.childIds = oldParent.childIds.filter(id => id !== activeNode.id);
+      }
 
-         window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+      // --- Step 2: If same parent, recalculate insert index after removal ---
+      const newParent = nodeMap.get(newParentId);
+      if (!newParent) return;
 
-       } catch (e) { console.error(e); }
+      if (oldParentId === newParentId) {
+        // After removal the target may have shifted; find it again
+        const idx = newParent.childIds.indexOf(overNode.id);
+        insertIndex = idx < 0 ? 0 : idx;
+      }
+
+      // --- Step 3: Insert at correct position ---
+      newParent.childIds.splice(insertIndex, 0, activeNode.id);
+      activeNode.parentId = newParentId;
+
+      // --- Step 4: Persist changed nodes ---
+      const toPersist: BaseNode[] = [activeNode, newParent];
+      if (oldParentId !== newParentId && oldParent) {
+        toPersist.push(oldParent);
+      }
+      await putNodes(toPersist);
+
+      // --- Step 5: Chrome tab sync for live open tabs ---
+      if (activeNode.type === 'tab' && activeNode.status === 'open' && activeNode.browserTabId) {
+        if (newParent.type === 'window' && newParent.browserWindowId) {
+          // Count how many open tabs precede insertIndex to get physical browser index
+          let physicalIndex = 0;
+          for (let i = 0; i < insertIndex; i++) {
+            const sibling = nodeMap.get(newParent.childIds[i]);
+            if (sibling && sibling.status === 'open' && sibling.browserTabId) physicalIndex++;
+          }
+          chrome.runtime.sendMessage({
+            type: "TAB_MOVED_UI",
+            tabId: activeNode.browserTabId,
+            windowId: newParent.browserWindowId,
+            index: physicalIndex
+          });
+        } else if (newParent.type === 'group') {
+          // Dragging a live tab into a group saves & closes it in Chrome
+          activeNode.status = 'saved';
+          activeNode.active = false;
+          const tabIdToClose = activeNode.browserTabId;
+          activeNode.browserTabId = undefined;
+          await putNode(activeNode);
+          chrome.tabs.remove(tabIdToClose).catch(() => {});
+        }
+      }
+
+      window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+    } catch (e) {
+      console.error('DND error:', e);
     }
   };
 
   const activeNode = useMemo(() => {
     const findNode = (nodes: TreeNode[], id: string): TreeNode | undefined => {
-       for (const n of nodes) {
-         if (n.id === id) return n;
-         if (n.children) {
-           const found = findNode(n.children, id);
-           if (found) return found;
-         }
-       }
-       return undefined;
+      for (const n of nodes) {
+        if (n.id === id) return n;
+        if (n.children) {
+          const found = findNode(n.children, id);
+          if (found) return found;
+        }
+      }
+      return undefined;
     };
     return activeId ? findNode(treeData, activeId) : undefined;
   }, [activeId, treeData]);
@@ -353,24 +401,26 @@ function App() {
         <span className="root-icon">🌐</span> Current Session
         <button className="btn-icon add-group-btn" onClick={addGroup} title="Add Group">📁+</button>
       </div>
-      <DndContext 
+      <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <SortableContext items={treeData.map(node => node.id)} strategy={verticalListSortingStrategy}>
+        {/* Single flat SortableContext with ALL node IDs enables cross-window drag */}
+        <SortableContext items={allNodeIds} strategy={verticalListSortingStrategy}>
           {treeData.map(node => (
             <NodeItem key={node.id} node={node} />
           ))}
         </SortableContext>
-        
+
         <DragOverlay adjustScale={false}>
-           {activeNode ? (
-             <div className="drag-overlay-item">
-               <span>{activeNode.title}</span>
-             </div>
-           ) : null}
+          {activeNode ? (
+            <div className="drag-overlay-item">
+              {activeNode.favIconUrl && <img src={activeNode.favIconUrl} className="favicon" alt="" />}
+              <span>{activeNode.title}</span>
+            </div>
+          ) : null}
         </DragOverlay>
       </DndContext>
     </div>
@@ -378,4 +428,3 @@ function App() {
 }
 
 export default App;
-
