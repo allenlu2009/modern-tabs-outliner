@@ -29,8 +29,8 @@ const noopSortingStrategy: SortingStrategy = () => null;
 
 /**
  * Renders the correct icon for a tab:
- * - Real favicon image (with error fallback)
- * - Red PDF badge when URL ends in .pdf and no favicon exists
+ * - Real favicon image (with error fallback to hide)
+ * - Subtle document emoji when URL is a PDF and no favicon exists
  * - Nothing otherwise
  */
 function TabIcon({ url, favIconUrl }: { url?: string; favIconUrl?: string }) {
@@ -55,10 +55,11 @@ function TabIcon({ url, favIconUrl }: { url?: string; favIconUrl?: string }) {
     lowerUrl.endsWith('.pdf') ||
     lowerUrl.includes('.pdf?') ||
     lowerUrl.includes('.pdf#') ||
-    lowerUrl.includes('/pdf') && lowerUrl.includes('file://');
+    (lowerUrl.includes('file://') && lowerUrl.includes('.pdf'));
 
   if (isPdf) {
-    return <span className="file-type-icon pdf-icon" title="PDF file">PDF</span>;
+    // Use a subtle document icon — small, same size as favicon, not visually heavy
+    return <span className="pdf-icon" title="PDF file">📄</span>;
   }
 
   return null;
@@ -86,15 +87,25 @@ function NodeItem({ node, depth = 0, isDragActive = false }: { node: TreeNode; d
   const [editTitle, setEditTitle] = useState(node.title || '');
 
   const focusTab = async () => {
-    if (typeof chrome !== 'undefined' && chrome.windows) {
-      if (node.browserTabId && node.browserWindowId && node.status === 'open') {
-        await chrome.windows.update(node.browserWindowId, { focused: true });
+    if (typeof chrome === 'undefined' || !chrome.tabs) return;
+
+    if (node.browserTabId && node.status === 'open') {
+      try {
+        // Use chrome.tabs.get() for a live window ID — the stored browserWindowId
+        // can be stale if the window was moved or re-created.
+        const liveTab = await chrome.tabs.get(node.browserTabId);
+        // Focus the window FIRST so it comes to the foreground, then activate the tab.
+        await chrome.windows.update(liveTab.windowId, { focused: true });
         await chrome.tabs.update(node.browserTabId, { active: true });
-      } else if (node.url && node.status !== 'open') {
-        if (typeof chrome !== 'undefined' && chrome.runtime) {
-          chrome.runtime.sendMessage({ type: "RESTORE_NODE", nodeId: node.id, url: node.url }).catch(err => console.log(err));
-        }
+      } catch (e) {
+        // Tab was likely closed externally — refresh the tree to clean up
+        console.warn('focusTab: tab not found, refreshing tree', e);
+        window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
       }
+    } else if (node.url && node.status !== 'open') {
+      chrome.runtime
+        .sendMessage({ type: "RESTORE_NODE", nodeId: node.id, url: node.url })
+        .catch(err => console.log(err));
     }
   };
 
