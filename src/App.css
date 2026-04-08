@@ -153,7 +153,19 @@ body {
   pointer-events: none;
 }
 
-.node-content:hover .node-actions {
+.node-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.1s;
+  flex-shrink: 0;
+  align-items: center;
+  margin-left: auto;
+}
+
+.node-content:hover .node-actions,
+.group-header:hover .group-actions {
   opacity: 1;
 }
 

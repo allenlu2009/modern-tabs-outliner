@@ -17,7 +17,6 @@ import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
 import {
   SortableContext,
   sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -293,9 +292,15 @@ function App() {
 
     if (!over || active.id === over.id) return;
 
+    // Use flat sortable indices to determine drag direction
+    // activeIndex < overIndex means dragging DOWN
+    const activeIndex = (active.data.current as any)?.sortable?.index ?? -1;
+    const overIndex = (over.data.current as any)?.sortable?.index ?? -1;
+    const draggingDown = activeIndex !== -1 && overIndex !== -1 && activeIndex < overIndex;
+
     try {
       const nodes = await getAllNodes();
-      // Deep-copy childIds arrays so we can mutate safely
+      // Deep-copy childIds so all mutations are safe
       const nodeMap = new Map<string, BaseNode>(
         nodes.map(n => [n.id, { ...n, childIds: [...n.childIds] }])
       );
@@ -307,52 +312,54 @@ function App() {
       const oldParentId = activeNode.parentId || 'root';
       const oldParent = nodeMap.get(oldParentId);
 
-      // --- Determine new parent and insert index BEFORE any mutations ---
-      let newParentId: string;
-      let insertIndex: number;
-
-      if (overNode.type === 'window' || overNode.type === 'group') {
-        // Dropping ON a container → prepend as first child
-        newParentId = overNode.id;
-        insertIndex = 0;
-      } else {
-        // Dropping ON a sibling → insert AT that sibling's current position
-        newParentId = overNode.parentId || 'root';
-        const overParent = nodeMap.get(newParentId);
-        const idx = overParent ? overParent.childIds.indexOf(overNode.id) : 0;
-        insertIndex = idx < 0 ? 0 : idx;
-      }
-
-      // --- Step 1: Remove active from old parent ---
-      if (oldParent) {
-        oldParent.childIds = oldParent.childIds.filter(id => id !== activeNode.id);
-      }
-
-      // --- Step 2: If same parent, recalculate insert index after removal ---
+      // Only drop INTO a group (not a window) to keep windows flat at root level
+      const dropIntoContainer = overNode.type === 'group';
+      const newParentId = dropIntoContainer ? overNode.id : (overNode.parentId || 'root');
       const newParent = nodeMap.get(newParentId);
       if (!newParent) return;
 
-      if (oldParentId === newParentId) {
-        // After removal the target may have shifted; find it again
+      const isSameParent = oldParentId === newParentId;
+      let insertIndex = 0;
+
+      if (dropIntoContainer) {
+        // Dropping ON a group header → insert as first child
+        if (oldParent) oldParent.childIds = oldParent.childIds.filter(id => id !== activeNode.id);
+        insertIndex = 0;
+      } else if (isSameParent) {
+        // Same parent: capture over's position BEFORE removing active,
+        // then re-find after removal to handle shifted indices.
+        // Direction matters: dragging DOWN → insert after over; UP → insert before (at) over.
+        const overIdxBefore = newParent.childIds.indexOf(overNode.id);
+        oldParent!.childIds = oldParent!.childIds.filter(id => id !== activeNode.id);
+        const overIdxAfter = newParent.childIds.indexOf(overNode.id);
+        // If over's index didn't change, active was above it (dragging down)
+        // If over's index shifted back by 1, active was above it too — same formula
+        insertIndex = draggingDown
+          ? (overIdxAfter < 0 ? newParent.childIds.length : overIdxAfter + 1)
+          : (overIdxAfter < 0 ? 0 : overIdxAfter);
+        // Ensure overIdxBefore reference used to avoid unused-var lint
+        void overIdxBefore;
+      } else {
+        // Cross-parent: remove from old parent, insert AT over's position in new parent
+        if (oldParent) oldParent.childIds = oldParent.childIds.filter(id => id !== activeNode.id);
         const idx = newParent.childIds.indexOf(overNode.id);
-        insertIndex = idx < 0 ? 0 : idx;
+        insertIndex = idx < 0 ? newParent.childIds.length : idx;
       }
 
-      // --- Step 3: Insert at correct position ---
       newParent.childIds.splice(insertIndex, 0, activeNode.id);
       activeNode.parentId = newParentId;
 
-      // --- Step 4: Persist changed nodes ---
-      const toPersist: BaseNode[] = [activeNode, newParent];
-      if (oldParentId !== newParentId && oldParent) {
-        toPersist.push(oldParent);
+      // Persist: deduplicate nodes (same-parent means oldParent === newParent)
+      const seen = new Set<string>();
+      const toPersist: BaseNode[] = [];
+      for (const n of [activeNode, newParent, ...(oldParent ? [oldParent] : [])]) {
+        if (!seen.has(n.id)) { seen.add(n.id); toPersist.push(n); }
       }
       await putNodes(toPersist);
 
-      // --- Step 5: Chrome tab sync for live open tabs ---
+      // Chrome tab sync for live open tabs
       if (activeNode.type === 'tab' && activeNode.status === 'open' && activeNode.browserTabId) {
         if (newParent.type === 'window' && newParent.browserWindowId) {
-          // Count how many open tabs precede insertIndex to get physical browser index
           let physicalIndex = 0;
           for (let i = 0; i < insertIndex; i++) {
             const sibling = nodeMap.get(newParent.childIds[i]);
@@ -365,7 +372,6 @@ function App() {
             index: physicalIndex
           });
         } else if (newParent.type === 'group') {
-          // Dragging a live tab into a group saves & closes it in Chrome
           activeNode.status = 'saved';
           activeNode.active = false;
           const tabIdToClose = activeNode.browserTabId;
@@ -407,8 +413,8 @@ function App() {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        {/* Single flat SortableContext with ALL node IDs enables cross-window drag */}
-        <SortableContext items={allNodeIds} strategy={verticalListSortingStrategy}>
+        {/* Single flat SortableContext — no strategy means no visual phantom shifts during drag */}
+        <SortableContext items={allNodeIds}>
           {treeData.map(node => (
             <NodeItem key={node.id} node={node} />
           ))}
