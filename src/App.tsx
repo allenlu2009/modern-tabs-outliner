@@ -1,10 +1,43 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import './App.css';
-import type { TreeNode } from './types';
+import type { TreeNode, BaseNode } from './types';
 import { getAllNodes, removeNode, putNode, putNodes } from './storage';
 import { generateId } from './utils';
 
-function NodeItem({ node }: { node: TreeNode }) {
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragOverlay,
+} from '@dnd-kit/core';
+import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+
+function NodeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: node.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.3 : 1,
+  };
+
   const [collapsed, setCollapsed] = useState(!!node.collapsed);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(node.title || '');
@@ -64,9 +97,10 @@ function NodeItem({ node }: { node: TreeNode }) {
   };
 
   return (
-    <div className="tree-node">
+    <div className="tree-node" ref={setNodeRef} style={style}>
       {node.type === 'window' || node.type === 'group' ? (
         <div className="group-header" onClick={() => setCollapsed(!collapsed)}>
+          <span className="drag-handle" {...attributes} {...listeners}>⣿</span>
           <span className="collapser">{collapsed ? '▶ ' : '▼ '}</span>
           <span className="node-icon">{node.type === 'window' ? '🪟' : '📁'}</span>
           {isEditing ? (
@@ -83,7 +117,7 @@ function NodeItem({ node }: { node: TreeNode }) {
               className="group-title" 
               onDoubleClick={(e) => { e.stopPropagation(); setIsEditing(true); }}
             >
-              {node.title} {node.type === 'window' && node.status !== 'open' && <span className="status-badge">[{node.status}]</span>}
+              {node.title} {node.status && node.status !== 'open' && <span className="status-badge">[{node.status}]</span>}
               {collapsed && node.children && <span className="child-count">({node.children.length})</span>}
             </span>
           )}
@@ -98,6 +132,7 @@ function NodeItem({ node }: { node: TreeNode }) {
           className={`node-content ${node.status !== 'open' ? 'closed-tab' : ''}`}
           onClick={focusTab}
         >
+          <span className="drag-handle" {...attributes} {...listeners}>⣿</span>
           {node.favIconUrl && <img src={node.favIconUrl} className="favicon" alt="icon" />}
           <div className={`node-title ${node.active ? 'active-tab' : ''}`} title={node.title}>{node.title}</div>
           <div className="node-actions">
@@ -111,9 +146,11 @@ function NodeItem({ node }: { node: TreeNode }) {
       
       {!collapsed && node.children && node.children.length > 0 && (
         <div className="node-children">
-          {node.children.map(child => (
-            <NodeItem key={child.id} node={child} />
-          ))}
+          <SortableContext items={node.children.map(c => c.id)} strategy={verticalListSortingStrategy}>
+            {node.children.map(child => (
+              <NodeItem key={child.id} node={child} depth={depth + 1} />
+            ))}
+          </SortableContext>
         </div>
       )}
     </div>
@@ -122,6 +159,14 @@ function NodeItem({ node }: { node: TreeNode }) {
 
 function App() {
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   const addGroup = async () => {
     try {
@@ -152,56 +197,53 @@ function App() {
     }
   };
 
-  useEffect(() => {
-    const loadTree = async () => {
-      try {
-        const flatNodes = await getAllNodes();
-        const nodeMap = new Map<string, TreeNode>();
-        
-        flatNodes.forEach(node => {
-          nodeMap.set(node.id, { ...node, children: [] });
-        });
+  const loadTree = async () => {
+    try {
+      const flatNodes = await getAllNodes();
+      const nodeMap = new Map<string, TreeNode>();
+      
+      flatNodes.forEach(node => {
+        nodeMap.set(node.id, { ...node, children: [] });
+      });
 
-        // Hydrate
-        let rootNodes: TreeNode[] = [];
-        
-        flatNodes.forEach(node => {
-          const hydratedNode = nodeMap.get(node.id)!;
-          if (node.id === "root" || node.parentId === null) {
-            rootNodes.push(hydratedNode);
-          } else {
-            const parent = nodeMap.get(node.parentId);
-            if (parent && parent.children) {
-              parent.children.push(hydratedNode);
-            } else {
-               rootNodes.push(hydratedNode);
-            }
-          }
-        });
-
-        // Fix order based on childIds
-        nodeMap.forEach(node => {
-          if (node.children && node.childIds) {
-            node.children.sort((a, b) => {
-              const idxA = node.childIds.indexOf(a.id);
-              const idxB = node.childIds.indexOf(b.id);
-              return (idxA === -1 ? 9999 : idxA) - (idxB === -1 ? 9999 : idxB);
-            });
-          }
-        });
-
-        // The root itself is what we want its children of mostly
-        const root = nodeMap.get("root");
-        if (root && root.children) {
-          setTreeData(root.children);
+      let rootNodes: TreeNode[] = [];
+      
+      flatNodes.forEach(node => {
+        const hydratedNode = nodeMap.get(node.id)!;
+        if (node.id === "root" || node.parentId === null) {
+          rootNodes.push(hydratedNode);
         } else {
-          setTreeData(rootNodes.filter(n => n.id !== "root"));
+          const parent = nodeMap.get(node.parentId);
+          if (parent && parent.children) {
+            parent.children.push(hydratedNode);
+          } else {
+             rootNodes.push(hydratedNode);
+          }
         }
-      } catch (e) {
-        console.error("Failed to load tree from IndexedDB", e);
-      }
-    };
+      });
 
+      nodeMap.forEach(node => {
+        if (node.children && node.childIds) {
+          node.children.sort((a, b) => {
+            const idxA = node.childIds.indexOf(a.id);
+            const idxB = node.childIds.indexOf(b.id);
+            return (idxA === -1 ? 9999 : idxA) - (idxB === -1 ? 9999 : idxB);
+          });
+        }
+      });
+
+      const root = nodeMap.get("root");
+      if (root && root.children) {
+        setTreeData(root.children);
+      } else {
+        setTreeData(rootNodes.filter(n => n.id !== "root"));
+      }
+    } catch (e) {
+      console.error("Failed to load tree from IndexedDB", e);
+    }
+  };
+
+  useEffect(() => {
     loadTree();
 
     const refreshListener = () => loadTree();
@@ -220,11 +262,90 @@ function App() {
         window.removeEventListener('REFRESH_TREE', refreshListener);
       };
     } else {
-      // Mock data for local Vite preview unattached to extension
-      // ... handled by storage logic mostly now
       return () => window.removeEventListener('REFRESH_TREE', refreshListener);
     }
   }, []);
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveId(event.active.id as string);
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveId(null);
+
+    if (over && active.id !== over.id) {
+       try {
+         const nodes = await getAllNodes();
+         const nodeMap = new Map<string, BaseNode>(nodes.map(n => [n.id, n]));
+         const activeNode = nodeMap.get(active.id as string);
+         const overNode = nodeMap.get(over.id as string);
+
+         if (!activeNode || !overNode) return;
+
+         // 1. Remove from old parent
+         if (activeNode.parentId) {
+           const oldParent = nodeMap.get(activeNode.parentId);
+           if (oldParent && oldParent.childIds) {
+             oldParent.childIds = oldParent.childIds.filter(id => id !== active.id);
+             await putNode(oldParent);
+           }
+         }
+
+         let newParentId = overNode.parentId;
+         let newIndex = 0;
+
+         if (overNode.type === 'window' || overNode.type === 'group' || overNode.id === 'root') {
+            newParentId = overNode.id;
+            newIndex = 0; 
+         } else {
+            const overParentId = overNode.parentId || 'root';
+            newParentId = overParentId;
+            const overParent = nodeMap.get(overParentId);
+            if (overParent) {
+               const idx = overParent.childIds.indexOf(overNode.id);
+               newIndex = idx + 1;
+            }
+         }
+
+         if (activeNode.type === 'tab' && activeNode.status === 'open' && activeNode.browserTabId) {
+            const newParent = nodeMap.get(newParentId!);
+            if (newParent && newParent.type === 'window' && newParent.browserWindowId) {
+                chrome.runtime.sendMessage({ type: "TAB_MOVED_UI", tabId: activeNode.browserTabId, windowId: newParent.browserWindowId, index: newIndex });
+            } else if (newParent && newParent.type === 'group') {
+                activeNode.status = 'saved';
+                activeNode.active = false;
+                chrome.tabs.remove(activeNode.browserTabId).catch(() => {});
+                activeNode.browserTabId = undefined;
+            }
+         }
+
+         activeNode.parentId = newParentId;
+         const parentNode = nodeMap.get(newParentId!);
+         if (parentNode) {
+            parentNode.childIds.splice(newIndex, 0, activeNode.id);
+            await putNodes([activeNode, parentNode]);
+         }
+
+         window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+
+       } catch (e) { console.error(e); }
+    }
+  };
+
+  const activeNode = useMemo(() => {
+    const findNode = (nodes: TreeNode[], id: string): TreeNode | undefined => {
+       for (const n of nodes) {
+         if (n.id === id) return n;
+         if (n.children) {
+           const found = findNode(n.children, id);
+           if (found) return found;
+         }
+       }
+       return undefined;
+    };
+    return activeId ? findNode(treeData, activeId) : undefined;
+  }, [activeId, treeData]);
 
   return (
     <div className="outliner-container">
@@ -232,11 +353,29 @@ function App() {
         <span className="root-icon">🌐</span> Current Session
         <button className="btn-icon add-group-btn" onClick={addGroup} title="Add Group">📁+</button>
       </div>
-      {treeData.map(node => (
-        <NodeItem key={node.id} node={node} />
-      ))}
+      <DndContext 
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext items={treeData.map(node => node.id)} strategy={verticalListSortingStrategy}>
+          {treeData.map(node => (
+            <NodeItem key={node.id} node={node} />
+          ))}
+        </SortableContext>
+        
+        <DragOverlay adjustScale={false}>
+           {activeNode ? (
+             <div className="drag-overlay-item">
+               <span>{activeNode.title}</span>
+             </div>
+           ) : null}
+        </DragOverlay>
+      </DndContext>
     </div>
   );
 }
 
 export default App;
+

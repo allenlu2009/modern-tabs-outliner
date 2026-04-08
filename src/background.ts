@@ -59,6 +59,15 @@ chrome.runtime.onMessage.addListener((msg) => {
     })();
     return false;
   }
+
+  if (msg.type === "TAB_MOVED_UI") {
+    pauseReconcile = true;
+    chrome.tabs.move(msg.tabId, { windowId: msg.windowId, index: msg.index }, () => {
+       pauseReconcile = false;
+       safeReconcile();
+    });
+    return false;
+  }
 });
 
 chrome.action.onClicked.addListener(async () => {
