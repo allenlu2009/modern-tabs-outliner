@@ -528,7 +528,7 @@ function App() {
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        // Single flat SortableContext — noopSortingStrategy stops phantom visual shifts
+        {/* Single flat SortableContext — noopSortingStrategy stops phantom visual shifts */}
         <SortableContext items={allNodeIds} strategy={noopSortingStrategy}>
           {treeData.map(node => (
             <NodeItem key={node.id} node={node} isDragActive={activeId !== null} />
