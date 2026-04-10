@@ -137,8 +137,20 @@ async function reconcileTabs() {
   for (const node of existingNodes) {
     if (node.status === "open") {
       if (node.type === "window" && node.browserWindowId && !activeWindowIds.has(node.browserWindowId)) {
-        node.status = "crashed";
-        nodesToSave.push(node);
+        // If a window is missing from the browser, only mark it as 'crashed' if it has tabs.
+        // If it's empty, we remove it entirely to prevent orphan [crash] window nodes.
+        const children = node.childIds || [];
+        const hasOpenChildren = children.some(id => {
+          const child = nodeMap.get(id);
+          return child && child.status === "open" && !nodesToRemove.has(id);
+        });
+
+        if (!hasOpenChildren) {
+          nodesToRemove.add(node.id);
+        } else {
+          node.status = "crashed";
+          nodesToSave.push(node);
+        }
       } else if (node.type === "tab" && node.browserTabId && !activeTabIds.has(node.browserTabId)) {
         // Did the user click 'X' inside the outliner UI specifically to save it?
         if (intentionallySavedNodes.has(node.id)) {

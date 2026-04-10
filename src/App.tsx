@@ -169,10 +169,15 @@ function NodeItem({ node, depth = 0, isDragActive = false }: { node: TreeNode; d
 
       // If parent window/group now has no more valid children, remove it too
       if (parentNode && parentNode.type === 'window') {
-        const remainingValid = parentNode.childIds
-          .filter(cid => cid !== node.id)
-          .filter(cid => allNodes.some(n => n.id === cid));
-        if (remainingValid.length === 0) {
+        const currentNodes = await getAllNodes();
+        const currentParent = currentNodes.find(n => n.id === parentNode.id);
+        
+        // A window is empty if it has no childIds that still exist in the database
+        const hasRemainingChildren = currentParent?.childIds.some(cid => 
+          currentNodes.some(n => n.id === cid)
+        );
+
+        if (!hasRemainingChildren) {
           await removeNode(parentNode.id);
           if (parentNode.status === 'open' && parentNode.browserWindowId
               && typeof chrome !== 'undefined' && chrome.windows) {
