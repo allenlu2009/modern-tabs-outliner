@@ -65,7 +65,17 @@ function TabIcon({ url, favIconUrl }: { url?: string; favIconUrl?: string }) {
   return null;
 }
 
-function NodeItem({ node, depth = 0, isDragActive = false }: { node: TreeNode; depth?: number; isDragActive?: boolean }) {
+function NodeItem({
+  node,
+  depth = 0,
+  isDragActive = false,
+  forceExpand = false
+}: {
+  node: TreeNode;
+  depth?: number;
+  isDragActive?: boolean;
+  forceExpand?: boolean;
+}) {
   const {
     attributes,
     listeners,
@@ -85,6 +95,13 @@ function NodeItem({ node, depth = 0, isDragActive = false }: { node: TreeNode; d
   const [collapsed, setCollapsed] = useState(!!node.collapsed);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(node.title || '');
+
+  // Auto-expand during search
+  useEffect(() => {
+    if (forceExpand) {
+      setCollapsed(false);
+    }
+  }, [forceExpand]);
 
   const focusTab = async () => {
     if (typeof chrome === 'undefined' || !chrome.tabs) return;
@@ -258,7 +275,7 @@ function NodeItem({ node, depth = 0, isDragActive = false }: { node: TreeNode; d
         <div className="node-children">
           {/* No nested SortableContext — one flat context in App for cross-container support */}
           {node.children.map(child => (
-            <NodeItem key={child.id} node={child} depth={depth + 1} isDragActive={isDragActive} />
+            <NodeItem key={child.id} node={child} depth={depth + 1} isDragActive={isDragActive} forceExpand={forceExpand} />
           ))}
         </div>
       )}
@@ -269,6 +286,7 @@ function NodeItem({ node, depth = 0, isDragActive = false }: { node: TreeNode; d
 function App() {
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -278,6 +296,29 @@ function App() {
       coordinateGetter: sortableKeyboardCoordinates,
     })
   );
+
+  const isSearching = searchQuery.trim().length > 0;
+
+  // Filter tree recursively. A node is kept if its title/URL matches OR it has a kept child.
+  const filteredTree = useMemo(() => {
+    if (!isSearching) return treeData;
+
+    const query = searchQuery.toLowerCase();
+    const filter = (nodes: TreeNode[]): TreeNode[] => {
+      const results: TreeNode[] = [];
+      for (const node of nodes) {
+        const titleMatch = node.title?.toLowerCase().includes(query);
+        const urlMatch = node.url?.toLowerCase().includes(query);
+        const filteredChildren = node.children ? filter(node.children) : [];
+
+        if (titleMatch || urlMatch || filteredChildren.length > 0) {
+          results.push({ ...node, children: filteredChildren });
+        }
+      }
+      return results;
+    };
+    return filter(treeData);
+  }, [treeData, searchQuery, isSearching]);
 
   // Collect ALL node IDs in flat DFS order for a single SortableContext.
   // This is the key fix for cross-container (cross-window) drag-and-drop.
@@ -291,9 +332,9 @@ function App() {
         }
       }
     };
-    collect(treeData);
+    collect(filteredTree);
     return ids;
-  }, [treeData]);
+  }, [filteredTree]);
 
   const addGroup = async () => {
     try {
@@ -376,6 +417,15 @@ function App() {
     const refreshListener = () => loadTree();
     window.addEventListener('REFRESH_TREE', refreshListener);
 
+    // Ctrl+F focus
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        document.getElementById('search-input')?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
     if (typeof chrome !== 'undefined' && chrome.runtime) {
       const listener = (msg: any) => {
         if (msg.type === "TREE_UPDATED") {
@@ -387,9 +437,13 @@ function App() {
       return () => {
         chrome.runtime.onMessage.removeListener(listener);
         window.removeEventListener('REFRESH_TREE', refreshListener);
+        window.removeEventListener('keydown', handleKeyDown);
       };
     } else {
-      return () => window.removeEventListener('REFRESH_TREE', refreshListener);
+      return () => {
+        window.removeEventListener('REFRESH_TREE', refreshListener);
+        window.removeEventListener('keydown', handleKeyDown);
+      }
     }
   }, []);
 
@@ -523,10 +577,25 @@ function App() {
 
   return (
     <div className="outliner-container">
+      <div className="search-container">
+        <input
+          id="search-input"
+          type="text"
+          className="search-input"
+          placeholder="Search tabs, windows, groups... (Ctrl+F)"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+        {isSearching && (
+          <button className="clear-search" onClick={() => setSearchQuery('')} title="Clear search">⨯</button>
+        )}
+      </div>
+
       <div className="session-root">
-        <span className="root-icon">🌐</span> Current Session
+        <span className="root-icon">🌐</span> {isSearching ? `Search Results (${allNodeIds.length})` : 'Current Session'}
         <button className="btn-icon add-group-btn" onClick={addGroup} title="Add Group">📁+</button>
       </div>
+
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -535,8 +604,8 @@ function App() {
       >
         {/* Single flat SortableContext — noopSortingStrategy stops phantom visual shifts */}
         <SortableContext items={allNodeIds} strategy={noopSortingStrategy}>
-          {treeData.map(node => (
-            <NodeItem key={node.id} node={node} isDragActive={activeId !== null} />
+          {filteredTree.map(node => (
+            <NodeItem key={node.id} node={node} isDragActive={activeId !== null} forceExpand={isSearching} />
           ))}
         </SortableContext>
 
