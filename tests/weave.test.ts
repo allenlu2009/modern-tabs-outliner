@@ -46,7 +46,46 @@ describe('calculateRestoreIndex logic offset', () => {
     ]);
 
     const resultIndex = calculateRestoreIndex('tab-target', parentChildIds, nodeMap);
-    expect(resultIndex).toBe(2);
+    expect(resultIndex).toBe(2); // tab-a and tab-c are open
+  });
+
+  it('handles sequential restoration correctly', () => {
+    const parentChildIds = ['tab-1', 'tab-2', 'tab-3'];
+    const nodeMap = new Map<string, BaseNode>([
+      ['tab-1', { id: 'tab-1', status: 'saved' } as BaseNode],
+      ['tab-2', { id: 'tab-2', status: 'saved' } as BaseNode],
+      ['tab-3', { id: 'tab-3', status: 'saved' } as BaseNode],
+    ]);
+
+    // Restore tab-1
+    expect(calculateRestoreIndex('tab-1', parentChildIds, nodeMap)).toBe(0);
+    nodeMap.get('tab-1')!.status = 'open';
+
+    // Restore tab-2
+    expect(calculateRestoreIndex('tab-2', parentChildIds, nodeMap)).toBe(1);
+    nodeMap.get('tab-2')!.status = 'open';
+
+    // Restore tab-3
+    expect(calculateRestoreIndex('tab-3', parentChildIds, nodeMap)).toBe(2);
+  });
+
+  it('preserves order when restoring out-of-order', () => {
+    const parentChildIds = ['tab-1', 'tab-2', 'tab-3'];
+    const nodeMap = new Map<string, BaseNode>([
+      ['tab-1', { id: 'tab-1', status: 'saved' } as BaseNode],
+      ['tab-2', { id: 'tab-2', status: 'saved' } as BaseNode],
+      ['tab-3', { id: 'tab-3', status: 'saved' } as BaseNode],
+    ]);
+
+    // Restore middle tab first
+    expect(calculateRestoreIndex('tab-2', parentChildIds, nodeMap)).toBe(0);
+    nodeMap.get('tab-2')!.status = 'open';
+
+    // Restore first tab
+    expect(calculateRestoreIndex('tab-1', parentChildIds, nodeMap)).toBe(0);
+    nodeMap.get('tab-1')!.status = 'open';
+
+    // Now tab-1 is index 0, tab-2 is index 1. Order is [tab-1, tab-2]. Correct!
   });
 
   it('returns exactly 0 if restoring to the very top of a window', () => {
