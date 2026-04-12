@@ -21,12 +21,7 @@ export async function handleMessage(msg: any) {
 
       const openWindows = await chrome.windows.getAll();
 
-      if (node.type === "window") {
-        const childNodes = (node.childIds || [])
-          .map(id => nodeMap.get(id))
-          .filter((n): n is BaseNode => !!n);
-        
-        // Find all nested tabs in this window branch
+      if (node.type === "window" || node.type === "group") {
         const getAllChildTabs = (n: BaseNode): BaseNode[] => {
             if (n.type === 'tab') return [n];
             if (!n.childIds) return [];
@@ -35,35 +30,66 @@ export async function handleMessage(msg: any) {
                 return child ? getAllChildTabs(child) : [];
             });
         };
-        const childTabs = childNodes.flatMap(n => getAllChildTabs(n));
+        const childTabs = getAllChildTabs(node);
         const urls = childTabs.map(t => t.url || "about:blank");
         
-        const win = await chrome.windows.create({ focused: true, url: urls.length > 0 ? urls : undefined });
-        if (!win) {
-          pauseReconcile = false;
-          return;
-        }
-        node.browserWindowId = win.id;
-        node.status = "open";
-        node.updatedAt = Date.now();
-        
-        const nodesToPut: BaseNode[] = [node];
-        
-        if (win.tabs) {
-          win.tabs.forEach((t, i) => {
-            const tabNode = childTabs[i];
-            if (tabNode) {
-              tabNode.browserTabId = t.id;
-              tabNode.browserWindowId = win.id;
-              tabNode.status = "open";
-              tabNode.active = t.active;
-              tabNode.updatedAt = Date.now();
-              nodesToPut.push(tabNode);
+        // Target window detection for branch restoration
+        let targetWindowId: number | undefined = undefined;
+        if (node.type === "group") {
+            // Find parent window in outliner
+            let curr = node;
+            while (curr && curr.parentId) {
+                const p = nodeMap.get(curr.parentId);
+                if (p?.type === 'window') {
+                    const isWinOpen = openWindows.find(w => w.id === p.browserWindowId);
+                    if (isWinOpen) targetWindowId = p.browserWindowId;
+                    break;
+                }
+                curr = p!;
             }
-          });
+        }
+
+        if (targetWindowId) {
+            // Restore into existing window
+            for (const tNode of childTabs) {
+                 if (tNode.status !== 'open') {
+                    const t = await chrome.tabs.create({ url: tNode.url, windowId: targetWindowId });
+                    tNode.browserTabId = t.id;
+                    tNode.browserWindowId = t.windowId;
+                    tNode.status = "open";
+                    tNode.updatedAt = Date.now();
+                    await putNode(tNode);
+                 }
+            }
+        } else {
+            // Create new window
+            const win = await chrome.windows.create({ focused: true, url: urls.length > 0 ? urls : undefined });
+            if (!win) {
+              pauseReconcile = false;
+              return;
+            }
+            if (node.type === 'window') {
+                node.browserWindowId = win.id;
+                node.status = "open";
+            }
+            
+            const nodesToPut: BaseNode[] = [node];
+            if (win.tabs) {
+              win.tabs.forEach((t, i) => {
+                const tabNode = childTabs[i];
+                if (tabNode) {
+                  tabNode.browserTabId = t.id;
+                  tabNode.browserWindowId = win.id;
+                  tabNode.status = "open";
+                  tabNode.active = t.active;
+                  tabNode.updatedAt = Date.now();
+                  nodesToPut.push(tabNode);
+                }
+              });
+            }
+            await putNodes(nodesToPut);
         }
         
-        await putNodes(nodesToPut);
         pauseReconcile = false;
         safeReconcile();
         return;

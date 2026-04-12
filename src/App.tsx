@@ -1,223 +1,176 @@
-import { useEffect, useState, useMemo } from 'react';
-import './App.css';
-import type { TreeNode, BaseNode } from './types';
-import { getAllNodes, removeNode, putNode, putNodes } from './storage';
-import { generateId } from './utils';
-
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  DndContext, 
+  closestCenter, 
+  KeyboardSensor, 
+  PointerSensor, 
+  useSensor, 
   useSensors,
   DragOverlay,
+  type DragStartEvent,
+  type DragEndEvent
 } from '@dnd-kit/core';
-import type { DragEndEvent, DragStartEvent } from '@dnd-kit/core';
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
+import { 
+  SortableContext, 
+  sortableKeyboardCoordinates 
 } from '@dnd-kit/sortable';
-import type { SortingStrategy } from '@dnd-kit/sortable';
+import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { getAllNodes, putNode, putNodes, removeNode } from './storage';
+import type { BaseNode } from './types';
+import { generateId } from './utils';
+import './App.css';
 
-// A no-op sorting strategy: items do NOT visually shift when dragging.
-// This eliminates phantom cramping in adjacent window groups.
-// Position is resolved only on drop via onDragEnd logic.
-const noopSortingStrategy: SortingStrategy = () => null;
-
-/**
- * Renders the correct icon for a tab:
- * - Real favicon image (with error fallback to hide)
- * - Subtle document emoji when URL is a PDF and no favicon exists
- * - Nothing otherwise
- */
-function TabIcon({ url, favIconUrl }: { url?: string; favIconUrl?: string }) {
-  const validFavicon =
-    favIconUrl &&
-    !favIconUrl.startsWith('chrome://') &&
-    !favIconUrl.startsWith('chrome-extension://');
-
-  if (validFavicon) {
-    return (
-      <img
-        src={favIconUrl}
-        className="favicon"
-        alt=""
-        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
-      />
-    );
-  }
-
-  const lowerUrl = url?.toLowerCase() ?? '';
-  const isPdf =
-    lowerUrl.endsWith('.pdf') ||
-    lowerUrl.includes('.pdf?') ||
-    lowerUrl.includes('.pdf#') ||
-    (lowerUrl.includes('file://') && lowerUrl.includes('.pdf'));
-
-  if (isPdf) {
-    // Use a subtle document icon — small, same size as favicon, not visually heavy
-    return <span className="pdf-icon" title="PDF file">📄</span>;
-  }
-
-  return null;
+// --- Types ---
+interface TreeNode extends BaseNode {
+  children: TreeNode[];
 }
 
-function NodeItem({
-  node,
-  depth = 0,
-  isDragActive = false,
-  forceExpand = false
-}: {
-  node: TreeNode;
-  depth?: number;
-  isDragActive?: boolean;
-  forceExpand?: boolean;
-}) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    isDragging,
-  } = useSortable({ id: node.id });
+// --- Components ---
 
-  const style = {
-    // When any drag is active, freeze all items except the one being dragged.
-    // Disabling transition entirely prevents the rubber-band spring-back on drop.
-    transform: isDragging ? undefined : (isDragActive ? 'none' : CSS.Transform.toString(transform)),
-    transition: 'none', // No CSS transition at all — eliminates rubber-band bounce on drop
-    opacity: isDragging ? 0 : 1,
+const TabIcon = ({ url, favIconUrl }: { url?: string; favIconUrl?: string }) => {
+  const [error, setError] = useState(false);
+  const getDomain = (u?: string) => {
+    try {
+      return u ? new URL(u).hostname : '';
+    } catch {
+      return '';
+    }
   };
 
-  const [collapsed, setCollapsed] = useState(!!node.collapsed);
+  if (!favIconUrl || error) {
+    return <div className="tab-icon-fallback">📄</div>;
+  }
+
+  return (
+    <img 
+      src={favIconUrl} 
+      className="tab-icon" 
+      onError={() => setError(true)} 
+      alt={getDomain(url)}
+      loading="lazy"
+    />
+  );
+};
+
+// This specialized sorting strategy tells dnd-kit NOT to do any automatic layout shifts
+// during the drag. All layout updates are handled by us in handleDragEnd.
+const noopSortingStrategy = () => null;
+
+const NodeItem = ({ node, depth, isDragActive, forceExpand }: { node: TreeNode; depth: number; isDragActive: boolean; forceExpand?: boolean }) => {
+  const [collapsed, setCollapsed] = useState(node.type === 'window' && node.status !== 'open');
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(node.title || '');
 
   // Auto-expand during search
   useEffect(() => {
-    if (forceExpand) {
-      setCollapsed(false);
-    }
+    if (forceExpand) setCollapsed(false);
   }, [forceExpand]);
 
-  const focusTab = async () => {
-    if (typeof chrome === 'undefined' || !chrome.tabs) return;
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ 
+    id: node.id,
+    data: { node }
+  });
 
-    if (node.browserTabId && node.status === 'open') {
-      try {
-        // Use chrome.tabs.get() for a live window ID — the stored browserWindowId
-        // can be stale if the window was moved or re-created.
-        const liveTab = await chrome.tabs.get(node.browserTabId);
-        // Focus the window FIRST so it comes to the foreground, then activate the tab.
-        await chrome.windows.update(liveTab.windowId, { focused: true });
-        await chrome.tabs.update(node.browserTabId, { active: true });
-      } catch (e) {
-        // Tab was likely closed externally — refresh the tree to clean up
-        console.warn('focusTab: tab not found, refreshing tree', e);
-        window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+  const style = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+    marginLeft: `${depth * 20}px`,
+    opacity: isDragging ? 0.3 : 1,
+    zIndex: isDragging ? 10 : 1
+  };
+
+  const focusTab = async () => {
+    if (node.type === 'tab' && node.browserTabId) {
+      if (typeof chrome !== 'undefined' && chrome.tabs) {
+        chrome.tabs.update(node.browserTabId, { active: true });
+        chrome.windows.update(node.browserWindowId!, { focused: true });
       }
-    } else if (node.url && node.status !== 'open') {
-      chrome.runtime
-        .sendMessage({ type: "RESTORE_NODE", nodeId: node.id, url: node.url })
-        .catch(err => console.log(err));
     }
   };
 
   const closeTab = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (typeof chrome !== 'undefined' && chrome.tabs && node.browserTabId) {
-      if (chrome.runtime) {
-        try {
-          await chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: node.id });
-        } catch (e) { console.error(e); }
-      }
-      chrome.tabs.remove(node.browserTabId).catch(() => {});
-    }
-  };
-
-  // Close entire window (saves tabs, closes in Chrome, keeps nodes as "saved")
-  const closeWindow = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!node.browserWindowId || typeof chrome === 'undefined') return;
-
-    if (chrome.runtime) {
-      chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: node.id }).catch(() => {});
-    }
-
-    if (node.children) {
-      for (const child of node.children) {
-        if (child.status === 'open' && child.browserTabId) {
-          chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: child.id }).catch(() => {});
-        }
-      }
-    }
-    chrome.windows.remove(node.browserWindowId).catch(() => {});
-  };
-
-  // Remove entire window node + all children from DB (and close in Chrome)
-  const removeWindowNodeBtn = async (e: React.MouseEvent) => {
-    e.stopPropagation();
     try {
-      if (node.children) {
-        for (const child of node.children) {
-          await removeNode(child.id);
-          if (child.status === 'open' && child.browserTabId && typeof chrome !== 'undefined' && chrome.tabs) {
-            chrome.tabs.remove(child.browserTabId).catch(() => {});
-          }
-        }
+      if (typeof chrome !== 'undefined' && chrome.tabs && node.browserTabId) {
+        chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: node.id });
+        chrome.tabs.remove(node.browserTabId);
       }
-      await removeNode(node.id);
-      if (node.status === 'open' && node.browserWindowId && typeof chrome !== 'undefined' && chrome.windows) {
-        chrome.windows.remove(node.browserWindowId).catch(() => {});
-      }
-      window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const removeNodeBtn = async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      if (node.status === 'open' && node.browserTabId && typeof chrome !== 'undefined' && chrome.tabs) {
-        chrome.tabs.remove(node.browserTabId).catch(() => {});
-      }
-      // Load all nodes to check if parent window becomes empty after removal
-      const allNodes = await getAllNodes();
-      const parentNode = node.parentId ? allNodes.find(n => n.id === node.parentId) : null;
-
       await removeNode(node.id);
+      window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
-      // If parent window/group now has no more valid children, remove it too
-      if (parentNode && parentNode.type === 'window') {
-        const currentNodes = await getAllNodes();
-        const currentParent = currentNodes.find(n => n.id === parentNode.id);
-        
-        // A window is empty if it has no childIds that still exist in the database
-        const hasRemainingChildren = currentParent?.childIds.some(cid => 
-          currentNodes.some(n => n.id === cid)
-        );
+  // Improved Close Branch (Recursive)
+  const closeBranch = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      const allFlatNodes = await getAllNodes();
+      const nodeMap = new Map(allFlatNodes.map(n => [n.id, n]));
+      
+      const getAllTabs = (id: string): BaseNode[] => {
+        const n = nodeMap.get(id);
+        if (!n) return [];
+        if (n.type === 'tab') return [n];
+        return (n.childIds || []).flatMap(cid => getAllTabs(cid));
+      };
 
-        if (!hasRemainingChildren) {
-          await removeNode(parentNode.id);
-          if (parentNode.status === 'open' && parentNode.browserWindowId
-              && typeof chrome !== 'undefined' && chrome.windows) {
-            chrome.windows.remove(parentNode.browserWindowId).catch(() => {});
-          }
+      const tabsToClose = getAllTabs(node.id).filter(t => t.status === 'open');
+      
+      if (typeof chrome !== 'undefined' && chrome.tabs) {
+        for (const t of tabsToClose) {
+           if (t.browserTabId) {
+             chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: t.id });
+             chrome.tabs.remove(t.browserTabId).catch(() => {});
+           }
         }
       }
+      
+      if (node.type === 'window') {
+        chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: node.id });
+      }
+      
       window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
     } catch(err) {
       console.error(err);
     }
   };
 
-  // Restore entire window node (re-opens in Chrome)
-  const restoreWindow = async (e: React.MouseEvent) => {
+  const restoreBranch = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (typeof chrome !== 'undefined' && chrome.runtime) {
       chrome.runtime.sendMessage({ type: "RESTORE_NODE", nodeId: node.id }).catch(() => {});
+    }
+  };
+
+  const removeWindowNodeBtn = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      if (node.status === 'open' && node.browserWindowId
+          && typeof chrome !== 'undefined' && chrome.windows) {
+        chrome.windows.remove(node.browserWindowId).catch(() => {});
+      }
+      await removeNode(node.id);
+      window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+    } catch(err) {
+      console.error(err);
     }
   };
 
@@ -261,12 +214,18 @@ function NodeItem({
             </span>
           )}
           <div className="node-actions group-actions">
-            {node.type === 'window' && node.status === 'open' && (
-              <button className="btn-icon" onClick={closeWindow} title="Save & Close Window">⨯</button>
-            )}
-            {node.type === 'window' && node.status !== 'open' && (
-              <button className="btn-icon" onClick={restoreWindow} title="Restore Window">↻</button>
-            )}
+            {/* Show Close button if branch has ANY open tabs recursively */}
+            {(() => {
+              const hasOpenTabs = (n: TreeNode & { status?: string }): boolean => {
+                if (n.type === 'tab' && n.status === 'open') return true;
+                return !!(n.children && n.children.some(child => hasOpenTabs(child)));
+              };
+              if (hasOpenTabs(node)) {
+                return <button className="btn-icon" onClick={closeBranch} title={`Close all in ${node.type}`}>⨯</button>;
+              } else {
+                return <button className="btn-icon" onClick={restoreBranch} title={`Restore all in ${node.type}`}>↻</button>;
+              }
+            })()}
             <button className="btn-icon" onClick={node.type === 'window' ? removeWindowNodeBtn : removeNodeBtn} title="Remove">🗑️</button>
           </div>
         </div>
@@ -289,7 +248,6 @@ function NodeItem({
 
       {!collapsed && node.children && node.children.length > 0 && (
         <div className="node-children">
-          {/* No nested SortableContext — one flat context in App for cross-container support */}
           {node.children.map(child => (
             <NodeItem key={child.id} node={child} depth={depth + 1} isDragActive={isDragActive} forceExpand={forceExpand} />
           ))}
@@ -297,7 +255,7 @@ function NodeItem({
       )}
     </div>
   );
-}
+};
 
 function App() {
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
@@ -305,59 +263,43 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
 
   const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 5 }, // Prevent accidental drags on clicks
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  const isSearching = searchQuery.trim().length > 0;
+  const flatList = useMemo(() => {
+    const list: TreeNode[] = [];
+    const flatten = (nodes: TreeNode[]) => {
+      nodes.forEach(n => {
+        list.push(n);
+        if (n.children && n.children.length > 0) flatten(n.children);
+      });
+    };
+    flatten(treeData);
+    return list;
+  }, [treeData]);
 
-  // Filter tree recursively. A node is kept if its title/URL matches OR it has a kept child.
   const filteredTree = useMemo(() => {
-    if (!isSearching) return treeData;
-
-    const query = searchQuery.toLowerCase();
-    const filter = (nodes: TreeNode[]): TreeNode[] => {
-      const results: TreeNode[] = [];
-      for (const node of nodes) {
-        const titleMatch = node.title?.toLowerCase().includes(query);
-        const urlMatch = node.url?.toLowerCase().includes(query);
-        const filteredChildren = node.children ? filter(node.children) : [];
-
-        if (titleMatch || urlMatch || filteredChildren.length > 0) {
-          results.push({ ...node, children: filteredChildren });
-        }
-      }
-      return results;
+    if (!searchQuery.trim()) return treeData;
+    const q = searchQuery.toLowerCase();
+    
+    const filterNodes = (nodes: TreeNode[]): TreeNode[] => {
+      return nodes
+        .map(n => ({ ...n, children: filterNodes(n.children) }))
+        .filter(n => n.title?.toLowerCase().includes(q) || n.url?.toLowerCase().includes(q) || n.children.length > 0);
     };
-    return filter(treeData);
-  }, [treeData, searchQuery, isSearching]);
+    return filterNodes(treeData);
+  }, [treeData, searchQuery]);
 
-  // Collect ALL node IDs in flat DFS order for a single SortableContext.
-  // This is the key fix for cross-container (cross-window) drag-and-drop.
-  const allNodeIds = useMemo(() => {
-    const ids: string[] = [];
-    const collect = (nodes: TreeNode[]) => {
-      for (const n of nodes) {
-        ids.push(n.id);
-        if (n.children && n.children.length > 0) {
-          collect(n.children);
-        }
-      }
-    };
-    collect(filteredTree);
-    return ids;
-  }, [filteredTree]);
+  const allNodeIds = useMemo(() => flatList.map(n => n.id), [flatList]);
+  const isSearching = searchQuery.trim().length > 0;
 
   const addGroup = async () => {
     try {
       const now = Date.now();
-      const newGroup = {
+      const newGroup: BaseNode = {
         id: `group-${generateId()}`,
-        type: 'group' as const,
+        type: 'group',
         parentId: 'root',
         childIds: [],
         title: 'New Group',
@@ -398,7 +340,7 @@ function App() {
           rootNodes.push(hydratedNode);
         } else {
           const parent = nodeMap.get(node.parentId);
-          if (parent && parent.children) {
+          if (parent) {
             parent.children.push(hydratedNode);
           } else {
             rootNodes.push(hydratedNode);
@@ -407,7 +349,7 @@ function App() {
       });
 
       nodeMap.forEach(node => {
-        if (node.children && node.childIds) {
+        if (node.childIds) {
           node.children.sort((a, b) => {
             const idxA = node.childIds.indexOf(a.id);
             const idxB = node.childIds.indexOf(b.id);
@@ -417,23 +359,16 @@ function App() {
       });
 
       const root = nodeMap.get("root");
-      if (root && root.children) {
-        setTreeData(root.children);
-      } else {
-        setTreeData(rootNodes.filter(n => n.id !== "root"));
-      }
+      setTreeData(root?.children || rootNodes.filter(n => n.id !== "root"));
     } catch (e) {
-      console.error("Failed to load tree from IndexedDB", e);
+      console.error("Failed to load tree", e);
     }
   };
 
   useEffect(() => {
     loadTree();
-
     const refreshListener = () => loadTree();
     window.addEventListener('REFRESH_TREE', refreshListener);
-
-    // Ctrl+F focus
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault();
@@ -444,23 +379,19 @@ function App() {
 
     if (typeof chrome !== 'undefined' && chrome.runtime) {
       const listener = (msg: any) => {
-        if (msg.type === "TREE_UPDATED") {
-          loadTree();
-        }
+        if (msg.type === "TREE_UPDATED") loadTree();
       };
-
       chrome.runtime.onMessage.addListener(listener);
       return () => {
         chrome.runtime.onMessage.removeListener(listener);
         window.removeEventListener('REFRESH_TREE', refreshListener);
         window.removeEventListener('keydown', handleKeyDown);
       };
-    } else {
-      return () => {
-        window.removeEventListener('REFRESH_TREE', refreshListener);
-        window.removeEventListener('keydown', handleKeyDown);
-      }
     }
+    return () => {
+      window.removeEventListener('REFRESH_TREE', refreshListener);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -470,30 +401,21 @@ function App() {
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveId(null);
-
     if (!over || active.id === over.id) return;
 
-    // Use flat sortable indices to determine drag direction
-    // activeIndex < overIndex means dragging DOWN
     const activeIndex = (active.data.current as any)?.sortable?.index ?? -1;
     const overIndex = (over.data.current as any)?.sortable?.index ?? -1;
     const draggingDown = activeIndex !== -1 && overIndex !== -1 && activeIndex < overIndex;
 
     try {
       const nodes = await getAllNodes();
-      // Deep-copy childIds so all mutations are safe
-      const nodeMap = new Map<string, BaseNode>(
-        nodes.map(n => [n.id, { ...n, childIds: [...n.childIds] }])
-      );
-
+      const nodeMap = new Map<string, BaseNode>(nodes.map(n => [n.id, { ...n, childIds: [...n.childIds] }]));
       const activeNode = nodeMap.get(active.id as string);
       const overNode = nodeMap.get(over.id as string);
       if (!activeNode || !overNode) return;
 
       const oldParentId = activeNode.parentId || 'root';
       const oldParent = nodeMap.get(oldParentId);
-
-      // Only drop INTO a group (not a window) to keep windows flat at root level
       const dropIntoContainer = overNode.type === 'group';
       const newParentId = dropIntoContainer ? overNode.id : (overNode.parentId || 'root');
       const newParent = nodeMap.get(newParentId);
@@ -503,25 +425,13 @@ function App() {
       let insertIndex = 0;
 
       if (dropIntoContainer) {
-        // Dropping ON a group header → insert as first child
         if (oldParent) oldParent.childIds = oldParent.childIds.filter(id => id !== activeNode.id);
         insertIndex = 0;
       } else if (isSameParent) {
-        // Same parent: capture over's position BEFORE removing active,
-        // then re-find after removal to handle shifted indices.
-        // Direction matters: dragging DOWN → insert after over; UP → insert before (at) over.
-        const overIdxBefore = newParent.childIds.indexOf(overNode.id);
         oldParent!.childIds = oldParent!.childIds.filter(id => id !== activeNode.id);
         const overIdxAfter = newParent.childIds.indexOf(overNode.id);
-        // If over's index didn't change, active was above it (dragging down)
-        // If over's index shifted back by 1, active was above it too — same formula
-        insertIndex = draggingDown
-          ? (overIdxAfter < 0 ? newParent.childIds.length : overIdxAfter + 1)
-          : (overIdxAfter < 0 ? 0 : overIdxAfter);
-        // Ensure overIdxBefore reference used to avoid unused-var lint
-        void overIdxBefore;
+        insertIndex = draggingDown ? (overIdxAfter + 1) : overIdxAfter;
       } else {
-        // Cross-parent: remove from old parent, insert AT over's position in new parent
         if (oldParent) oldParent.childIds = oldParent.childIds.filter(id => id !== activeNode.id);
         const idx = newParent.childIds.indexOf(overNode.id);
         insertIndex = idx < 0 ? newParent.childIds.length : idx;
@@ -530,44 +440,74 @@ function App() {
       newParent.childIds.splice(insertIndex, 0, activeNode.id);
       activeNode.parentId = newParentId;
 
-      // Persist: deduplicate nodes (same-parent means oldParent === newParent)
-      const seen = new Set<string>();
-      const toPersist: BaseNode[] = [];
-      for (const n of [activeNode, newParent, ...(oldParent ? [oldParent] : [])]) {
-        if (!seen.has(n.id)) { seen.add(n.id); toPersist.push(n); }
-      }
+      const toPersist: BaseNode[] = [activeNode, newParent];
+      if (oldParent && oldParent.id !== newParent.id) toPersist.push(oldParent);
       await putNodes(toPersist);
 
       // Auto-remove old window if it's now empty after cross-parent move
-      if (!isSameParent && oldParent && oldParent.type === 'window' && oldParent.childIds.length === 0) {
+      if (!isSameParent && oldParent?.type === 'window' && oldParent.childIds.length === 0) {
         await removeNode(oldParent.id);
-        if (oldParent.status === 'open' && oldParent.browserWindowId
-            && typeof chrome !== 'undefined' && chrome.windows) {
+        if (oldParent.status === 'open' && oldParent.browserWindowId && typeof chrome !== 'undefined') {
           chrome.windows.remove(oldParent.browserWindowId).catch(() => {});
         }
       }
 
-      // Chrome tab sync for live open tabs
+      // --- Physical Chrome Tab Synchronization ---
       if (activeNode.type === 'tab' && activeNode.status === 'open' && activeNode.browserTabId) {
-        if (newParent.type === 'window' && newParent.browserWindowId) {
-          let physicalIndex = 0;
-          for (let i = 0; i < insertIndex; i++) {
-            const sibling = nodeMap.get(newParent.childIds[i]);
-            if (sibling && sibling.status === 'open' && sibling.browserTabId) physicalIndex++;
+        // Find the "Physical" target window by searching up the tree
+        let effectiveWindowId: number | undefined = undefined;
+        let rootAncestorId: string | undefined = undefined;
+        
+        let curr: BaseNode | undefined = newParent;
+        while (curr) {
+          if (curr.type === 'window' && curr.browserWindowId) {
+            effectiveWindowId = curr.browserWindowId;
+            rootAncestorId = curr.id;
+            break;
           }
-          chrome.runtime.sendMessage({
-            type: "TAB_MOVED_UI",
-            tabId: activeNode.browserTabId,
-            windowId: newParent.browserWindowId,
-            index: physicalIndex
+          curr = curr.parentId ? nodeMap.get(curr.parentId) : undefined;
+        }
+
+        if (effectiveWindowId && rootAncestorId) {
+          // We need to find the physical index of the dropped tab within this window's open tabs.
+          // This requires a pre-order traversal of the window's logical branch to count open tabs before 'activeNode'.
+          
+          let physicalIndex = 0;
+          let found = false;
+
+          const countPrecedents = (id: string) => {
+            if (found) return;
+            if (id === activeNode.id) {
+              found = true;
+              return;
+            }
+            const node = nodeMap.get(id);
+            if (!node) return;
+            
+            if (node.type === 'tab' && node.status === 'open') {
+              physicalIndex++;
+            }
+            
+            if (node.childIds) {
+              for (const cid of node.childIds) {
+                countPrecedents(cid);
+              }
+            }
+          };
+
+          const windowNode = nodeMap.get(rootAncestorId);
+          if (windowNode && windowNode.childIds) {
+            for (const cid of windowNode.childIds) {
+              countPrecedents(cid);
+            }
+          }
+
+          chrome.runtime.sendMessage({ 
+            type: "TAB_MOVED_UI", 
+            tabId: activeNode.browserTabId, 
+            windowId: effectiveWindowId, 
+            index: physicalIndex 
           });
-        } else if (newParent.type === 'group') {
-          activeNode.status = 'saved';
-          activeNode.active = false;
-          const tabIdToClose = activeNode.browserTabId;
-          activeNode.browserTabId = undefined;
-          await putNode(activeNode);
-          chrome.tabs.remove(tabIdToClose).catch(() => {});
         }
       }
 
@@ -577,14 +517,12 @@ function App() {
     }
   };
 
-  const activeNode = useMemo(() => {
+  const activeTreeNode = useMemo(() => {
     const findNode = (nodes: TreeNode[], id: string): TreeNode | undefined => {
       for (const n of nodes) {
         if (n.id === id) return n;
-        if (n.children) {
-          const found = findNode(n.children, id);
-          if (found) return found;
-        }
+        const found = findNode(n.children, id);
+        if (found) return found;
       }
       return undefined;
     };
@@ -602,37 +540,26 @@ function App() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
         />
-        {isSearching && (
-          <button className="clear-search" onClick={() => setSearchQuery('')} title="Clear search">⨯</button>
-        )}
+        {isSearching && <button className="clear-search" onClick={() => setSearchQuery('')}>×</button>}
       </div>
 
       <div className="session-root">
-        <span className="root-icon">🌐</span> {isSearching ? `Search Results (${allNodeIds.length})` : 'Current Session'}
+        <span className="root-icon">📁</span> {isSearching ? `Search Results (${allNodeIds.length})` : 'Current Session'}
         <button className="btn-icon add-group-btn" onClick={addGroup} title="Add Group">📁+</button>
       </div>
 
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-      >
-        {/* Single flat SortableContext — noopSortingStrategy stops phantom visual shifts */}
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <SortableContext items={allNodeIds} strategy={noopSortingStrategy}>
           {filteredTree.map(node => (
-            <NodeItem key={node.id} node={node} isDragActive={activeId !== null} forceExpand={isSearching} />
+            <NodeItem key={node.id} node={node} depth={0} isDragActive={activeId !== null} forceExpand={isSearching} />
           ))}
         </SortableContext>
 
-        <DragOverlay
-          adjustScale={false}
-          dropAnimation={null}  // Prevents the rubber-band snap-back animation on drop
-        >
-          {activeNode ? (
+        <DragOverlay adjustScale={false} dropAnimation={null}>
+          {activeTreeNode ? (
             <div className="drag-overlay-item">
-              <TabIcon url={activeNode.url} favIconUrl={activeNode.favIconUrl} />
-              <span>{activeNode.title}</span>
+              <TabIcon url={activeTreeNode.url} favIconUrl={activeTreeNode.favIconUrl} />
+              <span>{activeTreeNode.title}</span>
             </div>
           ) : null}
         </DragOverlay>
