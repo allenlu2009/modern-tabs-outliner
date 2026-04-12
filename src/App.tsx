@@ -142,6 +142,11 @@ function NodeItem({
   const closeWindow = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!node.browserWindowId || typeof chrome === 'undefined') return;
+
+    if (chrome.runtime) {
+      chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: node.id }).catch(() => {});
+    }
+
     if (node.children) {
       for (const child of node.children) {
         if (child.status === 'open' && child.browserTabId) {

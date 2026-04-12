@@ -17,6 +17,7 @@ const chromeMock = {
   },
   windows: {
     update: vi.fn().mockResolvedValue(true),
+    remove: vi.fn().mockResolvedValue(true),
   }
 };
 

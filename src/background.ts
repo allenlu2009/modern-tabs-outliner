@@ -137,19 +137,35 @@ async function reconcileTabs() {
   for (const node of existingNodes) {
     if (node.status === "open") {
       if (node.type === "window" && node.browserWindowId && !activeWindowIds.has(node.browserWindowId)) {
-        // If a window is missing from the browser, only mark it as 'crashed' if it has tabs.
-        // If it's empty, we remove it entirely to prevent orphan [crash] window nodes.
-        const children = node.childIds || [];
-        const hasOpenChildren = children.some(id => {
-          const child = nodeMap.get(id);
-          return child && child.status === "open" && !nodesToRemove.has(id);
-        });
-
-        if (!hasOpenChildren) {
-          nodesToRemove.add(node.id);
-        } else {
-          node.status = "crashed";
+        if (intentionallySavedNodes.has(node.id)) {
+          node.status = "saved";
           nodesToSave.push(node);
+          intentionallySavedNodes.delete(node.id);
+        } else {
+          // If a window is missing from the browser, only mark it as 'crashed' if it has open tabs.
+          // If it's empty, or only has saved/closed nodes, we might remove it unless it was intentional.
+          const childrenIds = node.childIds || [];
+          const hasOpenChildren = childrenIds.some(id => {
+            const child = nodeMap.get(id);
+            return child && child.status === "open" && !nodesToRemove.has(id);
+          });
+
+          // Check for any children that exist at all (open, saved, or crashed) and aren't being removed
+          const hasAnyChildren = childrenIds.some(id => {
+            const child = nodeMap.get(id);
+            return child && !nodesToRemove.has(id);
+          });
+
+          if (!hasAnyChildren) {
+            nodesToRemove.add(node.id);
+          } else if (hasOpenChildren) {
+            node.status = "crashed";
+            nodesToSave.push(node);
+          } else {
+            // Window is closed but has 'saved' children - mark window as saved too
+            node.status = "saved";
+            nodesToSave.push(node);
+          }
         }
       } else if (node.type === "tab" && node.browserTabId && !activeTabIds.has(node.browserTabId)) {
         // Did the user click 'X' inside the outliner UI specifically to save it?
