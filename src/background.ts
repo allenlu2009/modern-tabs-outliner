@@ -23,12 +23,40 @@ chrome.runtime.onMessage.addListener((msg) => {
         const openWindows = await chrome.windows.getAll();
 
         if (node.type === "window") {
-            // Restore a full window (currently just creates the browser window)
-            chrome.windows.create({ focused: true }, async (win) => {
-                node.browserWindowId = win!.id;
+            const childTabs = (node.childIds || [])
+                .map(id => nodeMap.get(id))
+                .filter((n): n is BaseNode => !!n && n.type === 'tab');
+            
+            const urls = childTabs.map(t => t.url || "about:blank");
+            
+            chrome.windows.create({ focused: true, url: urls.length > 0 ? urls : undefined }, async (win) => {
+                if (!win) {
+                    pauseReconcile = false;
+                    return;
+                }
+                node.browserWindowId = win.id;
                 node.status = "open";
                 node.updatedAt = Date.now();
-                await putNode(node);
+                
+                const nodesToPut: BaseNode[] = [node];
+                
+                if (win.tabs) {
+                    // Chrome opens the tabs in the exact order of the URL array.
+                    // We map them back to our outliner nodes by index.
+                    win.tabs.forEach((t, i) => {
+                        const tabNode = childTabs[i];
+                        if (tabNode) {
+                            tabNode.browserTabId = t.id;
+                            tabNode.browserWindowId = win.id;
+                            tabNode.status = "open";
+                            tabNode.active = t.active;
+                            tabNode.updatedAt = Date.now();
+                            nodesToPut.push(tabNode);
+                        }
+                    });
+                }
+                
+                await putNodes(nodesToPut);
                 pauseReconcile = false;
                 safeReconcile();
             });
