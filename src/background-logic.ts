@@ -155,7 +155,13 @@ export async function handleMessage(msg: any) {
 
   if (msg.type === "TAB_MOVED_UI") {
     pauseReconcile = true;
-    chrome.tabs.move(msg.tabId, { windowId: msg.windowId, index: msg.index }, () => {
+    console.log(`[Background] Received TAB_MOVED_UI: Tab ${msg.tabId} to Win ${msg.windowId} Pos ${msg.index}`);
+    chrome.tabs.move(msg.tabId, { windowId: msg.windowId, index: msg.index }, (tab) => {
+       if (chrome.runtime.lastError) {
+         console.error(`[Background] chrome.tabs.move failed: ${chrome.runtime.lastError.message}`);
+       } else {
+         console.log(`[Background] chrome.tabs.move success:`, tab);
+       }
        pauseReconcile = false;
        safeReconcile();
     });

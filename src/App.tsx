@@ -453,62 +453,71 @@ function App() {
       }
 
       // --- Physical Chrome Tab Synchronization ---
-      if (activeNode.type === 'tab' && activeNode.status === 'open' && activeNode.browserTabId) {
-        // Find the "Physical" target window by searching up the tree
-        let effectiveWindowId: number | undefined = undefined;
-        let rootAncestorId: string | undefined = undefined;
-        
-        let curr: BaseNode | undefined = newParent;
+      // --- Physical Chrome Tab Synchronization (Recursive) ---
+      const findEffectiveWindow = (startNode: BaseNode, map: Map<string, BaseNode>) => {
+        let curr: BaseNode | undefined = startNode;
         while (curr) {
-          if (curr.type === 'window' && curr.browserWindowId) {
-            effectiveWindowId = curr.browserWindowId;
-            rootAncestorId = curr.id;
-            break;
-          }
-          curr = curr.parentId ? nodeMap.get(curr.parentId) : undefined;
+          if (curr.type === 'window' && curr.browserWindowId) return { winId: curr.browserWindowId, rootId: curr.id };
+          curr = curr.parentId ? map.get(curr.parentId) : undefined;
         }
+        return null;
+      };
 
-        if (effectiveWindowId && rootAncestorId) {
-          // We need to find the physical index of the dropped tab within this window's open tabs.
-          // This requires a pre-order traversal of the window's logical branch to count open tabs before 'activeNode'.
-          
-          let physicalIndex = 0;
-          let found = false;
+      const syncResult = findEffectiveWindow(newParent, nodeMap);
 
-          const countPrecedents = (id: string) => {
-            if (found) return;
-            if (id === activeNode.id) {
-              found = true;
-              return;
-            }
-            const node = nodeMap.get(id);
-            if (!node) return;
-            
-            if (node.type === 'tab' && node.status === 'open') {
-              physicalIndex++;
-            }
-            
-            if (node.childIds) {
-              for (const cid of node.childIds) {
-                countPrecedents(cid);
+      if (syncResult) {
+        const { winId: effectiveWindowId, rootId: rootAncestorId } = syncResult;
+        
+        // Find all open tabs in the branch we just moved
+        const getOpenTabsInBranch = (id: string): BaseNode[] => {
+          const n = nodeMap.get(id);
+          if (!n) return [];
+          if (n.type === 'tab') return n.status === 'open' ? [n] : [];
+          return (n.childIds || []).flatMap(cid => getOpenTabsInBranch(cid));
+        };
+
+        const branchTabs = getOpenTabsInBranch(activeNode.id);
+        
+        if (branchTabs.length > 0) {
+          // Calculate physical indices for each tab in the branch
+          // Strategy: re-run the tree traversal for each tab based on its NEW position in the root window
+          const windowNode = nodeMap.get(rootAncestorId);
+          if (windowNode) {
+            for (const movingTab of branchTabs) {
+              if (!movingTab.browserTabId) continue;
+              
+              let physicalIndex = 0;
+              let found = false;
+
+              const traverse = (id: string) => {
+                if (found) return;
+                if (id === movingTab.id) {
+                  found = true;
+                  return;
+                }
+                const n = nodeMap.get(id);
+                if (n?.type === 'tab' && n.status === 'open') physicalIndex++;
+                if (n?.childIds) {
+                  for (const cid of n.childIds) traverse(cid);
+                }
+              };
+
+              for (const cid of windowNode.childIds || []) traverse(cid);
+
+              if (found) {
+                console.log(`[Sync] Moving tab ${movingTab.browserTabId} to window ${effectiveWindowId} at index ${physicalIndex}`);
+                chrome.runtime.sendMessage({ 
+                  type: "TAB_MOVED_UI", 
+                  tabId: movingTab.browserTabId, 
+                  windowId: effectiveWindowId, 
+                  index: physicalIndex 
+                });
               }
             }
-          };
-
-          const windowNode = nodeMap.get(rootAncestorId);
-          if (windowNode && windowNode.childIds) {
-            for (const cid of windowNode.childIds) {
-              countPrecedents(cid);
-            }
           }
-
-          chrome.runtime.sendMessage({ 
-            type: "TAB_MOVED_UI", 
-            tabId: activeNode.browserTabId, 
-            windowId: effectiveWindowId, 
-            index: physicalIndex 
-          });
         }
+      } else {
+        console.warn(`[Sync] Drop target is not under any physical window. Not moving browser tabs.`);
       }
 
       window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
