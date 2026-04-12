@@ -213,6 +213,14 @@ function NodeItem({
     }
   };
 
+  // Restore entire window node (re-opens in Chrome)
+  const restoreWindow = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (typeof chrome !== 'undefined' && chrome.runtime) {
+      chrome.runtime.sendMessage({ type: "RESTORE_NODE", nodeId: node.id }).catch(() => {});
+    }
+  };
+
   const handleRename = async (e: React.FormEvent) => {
     e.preventDefault();
     if (editTitle.trim() === '') return;
@@ -255,6 +263,9 @@ function NodeItem({
           <div className="node-actions group-actions">
             {node.type === 'window' && node.status === 'open' && (
               <button className="btn-icon" onClick={closeWindow} title="Save & Close Window">⨯</button>
+            )}
+            {node.type === 'window' && node.status !== 'open' && (
+              <button className="btn-icon" onClick={restoreWindow} title="Restore Window">↻</button>
             )}
             <button className="btn-icon" onClick={node.type === 'window' ? removeWindowNodeBtn : removeNodeBtn} title="Remove">🗑️</button>
           </div>

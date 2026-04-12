@@ -18,6 +18,12 @@ const chromeMock = {
   windows: {
     update: vi.fn().mockResolvedValue(true),
     remove: vi.fn().mockResolvedValue(true),
+    getAll: vi.fn().mockResolvedValue([]),
+    create: vi.fn().mockImplementation((opts, cb) => {
+      const win = { id: 123, tabs: [] };
+      if (cb) cb(win);
+      return Promise.resolve(win);
+    }),
   }
 };
 

@@ -18,17 +18,54 @@ chrome.runtime.onMessage.addListener((msg) => {
         const nodes = await getAllNodes();
         const nodeMap = new Map(nodes.map(n => [n.id, n]));
         const node = nodeMap.get(msg.nodeId);
-        if (!node) throw new Error("Restoring node not found");
-        
-        // Ensure browser physical window is still available, fallback to any normal window
-        let targetWindowId = node.browserWindowId;
+        if (!node) throw new Error("Restoring node find failed");
+
         const openWindows = await chrome.windows.getAll();
-        const isWinOpen = openWindows.some(w => w.id === targetWindowId);
+
+        if (node.type === "window") {
+            // Restore a full window (currently just creates the browser window)
+            chrome.windows.create({ focused: true }, async (win) => {
+                node.browserWindowId = win!.id;
+                node.status = "open";
+                node.updatedAt = Date.now();
+                await putNode(node);
+                pauseReconcile = false;
+                safeReconcile();
+            });
+            return;
+        }
+
+        // --- Tab Restoration Logic ---
+        let targetWindowId = node.browserWindowId;
+        let isWinOpen = openWindows.some(w => w.id === targetWindowId);
+
+        // If specific window isn't open, check if it has a saved parent window we should restore
+        if (!isWinOpen && node.parentId) {
+          const parent = nodeMap.get(node.parentId);
+          if (parent && parent.type === "window") {
+            const isParentOpen = openWindows.some(w => w.id === parent.browserWindowId);
+            if (!isParentOpen) {
+              // Create new window for this saved parent
+              const newWin = await chrome.windows.create({ focused: true });
+              parent.browserWindowId = newWin.id;
+              parent.status = "open";
+              parent.updatedAt = Date.now();
+              await putNode(parent);
+              targetWindowId = newWin.id;
+              isWinOpen = true;
+            } else {
+              targetWindowId = parent.browserWindowId;
+              isWinOpen = true;
+            }
+          }
+        }
+
+        // Final fallback: use any normal window if we still don't have a target
         if (!isWinOpen) {
           targetWindowId = openWindows.find(w => w.type === 'normal')?.id;
         }
 
-        // Deep Index Calculation ensures strict outliner insertion without dropping back to end-of-list defaults.
+        // Deep Index Calculation ensures strict outliner insertion
         let calculatedIndex: number | undefined = undefined;
         if (node.parentId) {
           const parent = nodeMap.get(node.parentId);
