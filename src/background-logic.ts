@@ -155,12 +155,9 @@ export async function handleMessage(msg: any) {
 
   if (msg.type === "TAB_MOVED_UI") {
     pauseReconcile = true;
-    console.log(`[Background] Received TAB_MOVED_UI: Tab ${msg.tabId} to Win ${msg.windowId} Pos ${msg.index}`);
-    chrome.tabs.move(msg.tabId, { windowId: msg.windowId, index: msg.index }, (tab) => {
+    chrome.tabs.move(msg.tabId, { windowId: msg.windowId, index: msg.index }, () => {
        if (chrome.runtime.lastError) {
-         console.error(`[Background] chrome.tabs.move failed: ${chrome.runtime.lastError.message}`);
-       } else {
-         console.log(`[Background] chrome.tabs.move success:`, tab);
+         console.warn(`[Outliner] chrome.tabs.move: ${chrome.runtime.lastError.message}`);
        }
        pauseReconcile = false;
        safeReconcile();
@@ -171,8 +168,9 @@ export async function handleMessage(msg: any) {
 
 export function initializeBackground() {
   chrome.runtime.onMessage.addListener((msg) => {
+    // Return true to keep the message channel open for the async handler.
     handleMessage(msg);
-    return false; 
+    return true;
   });
 
   chrome.action.onClicked.addListener(async () => {
@@ -280,10 +278,14 @@ async function reconcileTabs() {
     }
   }
 
+  // Track which window IDs the reconciler knows about, to update root.childIds.
+  const reconciledWindowIds: string[] = [];
+
   for (const w of windows) {
     if (w.id === outlinerWindowId) continue;
 
     let winNode = winByBrowserId.get(w.id);
+    const isNewWindow = !winNode;
     if (!winNode) {
       winNode = {
         id: `win-${w.id}-${generateId()}`,
@@ -302,6 +304,7 @@ async function reconcileTabs() {
       winNode.updatedAt = now;
       if (!winNode.childIds) winNode.childIds = [];
     }
+    reconciledWindowIds.push(winNode.id);
     
     const tabsInThisWindow: string[] = [];
     
@@ -334,26 +337,34 @@ async function reconcileTabs() {
         tabNode.active = t.active;
         tabNode.browserWindowId = w.id;
 
-        // VIRTUAL PARENTING: Preserve group parent if it exists
-        if (tabNode.parentId && nodeMap.get(tabNode.parentId)?.type === 'group') {
-           // Keep the group parent
-        } else {
-           tabNode.parentId = winNode.id;
+        // VIRTUAL PARENTING: Preserve a group parent if the tab was placed in one.
+        const parentNode = nodeMap.get(tabNode.parentId ?? '');
+        if (parentNode?.type !== 'group') {
+          tabNode.parentId = winNode.id;
         }
       }
       
-      // Collect only tabs that are logically direct children of this window
+      // Only direct window children participate in the window's childIds order.
       if (tabNode.parentId === winNode.id) {
         tabsInThisWindow.push(tabNode.id);
       }
       nodesToSave.push(tabNode);
     }
     
-    // Positional Weave: Only weave tabs that are direct children of the window (not in groups)
-    // We also need to PRESERVE group nodes that are under this window!
-    // Re-weave the window's childIds, keeping groups in place and weaving tabs around them
+    // Positional Weave: merge live tab order into the saved outliner order.
+    // Groups inside the window are preserved because they are not in tabsInThisWindow,
+    // so positionalWeave treats them as "saved" IDs and keeps them in place.
     winNode.childIds = positionalWeave(winNode.childIds || [], tabsInThisWindow, nodesToRemove);
     nodesToSave.push(winNode);
+
+    // If this window was brand new, register it under root.childIds.
+    if (isNewWindow) {
+      const rootNode = nodeMap.get("root");
+      if (rootNode && !rootNode.childIds.includes(winNode.id)) {
+        rootNode.childIds.push(winNode.id);
+        nodesToSave.push(rootNode);
+      }
+    }
   }
 
   if (!nodeMap.has("root")) {

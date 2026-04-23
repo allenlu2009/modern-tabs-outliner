@@ -29,7 +29,7 @@ export interface BaseNode {
   active?: boolean;
 }
 
-// Hydrated tree node for UI rendering
+// Hydrated tree node for UI rendering — children is always populated during loadTree.
 export type TreeNode = BaseNode & {
-  children?: TreeNode[];
+  children: TreeNode[];
 };

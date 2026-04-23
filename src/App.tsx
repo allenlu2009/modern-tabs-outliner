@@ -16,15 +16,13 @@ import {
 } from '@dnd-kit/sortable';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { getAllNodes, putNode, putNodes, removeNode } from './storage';
-import type { BaseNode } from './types';
+import { getAllNodes, putNode, putNodes, removeNode, removeSubtree } from './storage';
+import type { BaseNode, TreeNode } from './types';
 import { generateId } from './utils';
 import './App.css';
 
-// --- Types ---
-interface TreeNode extends BaseNode {
-  children: TreeNode[];
-}
+// TreeNode is imported from types.ts — children is always populated during loadTree.
+
 
 // --- Components ---
 
@@ -111,14 +109,16 @@ const NodeItem = ({ node, depth, isDragActive, forceExpand }: { node: TreeNode; 
   const removeNodeBtn = async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      await removeNode(node.id);
+      // Cascade: remove this node and all descendants from storage.
+      await removeSubtree(node.id);
       window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
     } catch (err) {
       console.error(err);
     }
   };
 
-  // Improved Close Branch (Recursive)
+  // Close all open browser tabs in this branch; let the background reconciler
+  // broadcast TREE_UPDATED naturally (avoids the race where we refresh before tabs close).
   const closeBranch = async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
@@ -137,17 +137,19 @@ const NodeItem = ({ node, depth, isDragActive, forceExpand }: { node: TreeNode; 
       if (typeof chrome !== 'undefined' && chrome.tabs) {
         for (const t of tabsToClose) {
            if (t.browserTabId) {
+             // Pre-register as intentional saves so reconciler preserves them.
              chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: t.id });
-             chrome.tabs.remove(t.browserTabId).catch(() => {});
            }
         }
+        if (node.type === 'window') {
+          chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: node.id });
+        }
+        // Close actual browser tabs — background onRemoved will trigger reconcile + TREE_UPDATED.
+        for (const t of tabsToClose) {
+          if (t.browserTabId) chrome.tabs.remove(t.browserTabId).catch(() => {});
+        }
       }
-      
-      if (node.type === 'window') {
-        chrome.runtime.sendMessage({ type: "INTENTIONAL_SAVE", nodeId: node.id });
-      }
-      
-      window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+      // Do NOT dispatch REFRESH_TREE here — background will broadcast after reconcile.
     } catch(err) {
       console.error(err);
     }
@@ -167,7 +169,8 @@ const NodeItem = ({ node, depth, isDragActive, forceExpand }: { node: TreeNode; 
           && typeof chrome !== 'undefined' && chrome.windows) {
         chrome.windows.remove(node.browserWindowId).catch(() => {});
       }
-      await removeNode(node.id);
+      // Cascade: removes window + all child tabs/groups from storage.
+      await removeSubtree(node.id);
       window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
     } catch(err) {
       console.error(err);
@@ -284,9 +287,15 @@ function App() {
     const q = searchQuery.toLowerCase();
     
     const filterNodes = (nodes: TreeNode[]): TreeNode[] => {
-      return nodes
-        .map(n => ({ ...n, children: filterNodes(n.children) }))
-        .filter(n => n.title?.toLowerCase().includes(q) || n.url?.toLowerCase().includes(q) || n.children.length > 0);
+      const result: TreeNode[] = [];
+      for (const n of nodes) {
+        const filteredChildren = filterNodes(n.children);
+        const matches = n.title?.toLowerCase().includes(q) || n.url?.toLowerCase().includes(q);
+        if (matches || filteredChildren.length > 0) {
+          result.push({ ...n, children: filteredChildren });
+        }
+      }
+      return result;
     };
     return filterNodes(treeData);
   }, [treeData, searchQuery]);
