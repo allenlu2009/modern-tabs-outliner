@@ -85,11 +85,20 @@ const NodeItem = ({ node, depth, isDragActive, forceExpand }: { node: TreeNode; 
     zIndex: isDragging ? 10 : 1
   };
 
-  const focusTab = async () => {
-    if (node.type === 'tab' && node.browserTabId) {
+  const handleTabClick = async () => {
+    if (node.type !== 'tab') return;
+
+    if (node.status === 'open' && node.browserTabId) {
+      // Open tab: bring its window and tab into focus.
       if (typeof chrome !== 'undefined' && chrome.tabs) {
         chrome.tabs.update(node.browserTabId, { active: true });
-        chrome.windows.update(node.browserWindowId!, { focused: true });
+        if (node.browserWindowId) chrome.windows.update(node.browserWindowId, { focused: true });
+      }
+    } else if (node.status !== 'open') {
+      // Saved/closed tab: restore it.
+      if (typeof chrome !== 'undefined' && chrome.runtime) {
+        chrome.runtime.sendMessage({ type: "RESTORE_NODE", nodeId: node.id, url: node.url })
+          .catch(() => {});
       }
     }
   };
@@ -235,7 +244,8 @@ const NodeItem = ({ node, depth, isDragActive, forceExpand }: { node: TreeNode; 
       ) : (
         <div
           className={`node-content ${node.status !== 'open' ? 'closed-tab' : ''}`}
-          onClick={focusTab}
+          onClick={handleTabClick}
+          title={node.status !== 'open' ? 'Click to restore this tab' : undefined}
         >
           <span className="drag-handle" {...attributes} {...listeners}>⣿</span>
           <TabIcon url={node.url} favIconUrl={node.favIconUrl} />
