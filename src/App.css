@@ -332,3 +332,22 @@ body {
 .clear-search:hover {
   opacity: 1;
 }
+
+.extract-btn {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.extract-btn:hover {
+  opacity: 0.85;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}

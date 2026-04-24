@@ -303,6 +303,13 @@ function App() {
   const allNodeIds = useMemo(() => flatList.map(n => n.id), [flatList]);
   const isSearching = searchQuery.trim().length > 0;
 
+  // All leaf tab nodes from the current filtered (search) results.
+  const matchingTabs = useMemo(() => {
+    const collect = (nodes: TreeNode[]): TreeNode[] =>
+      nodes.flatMap(n => n.type === 'tab' ? [n] : collect(n.children));
+    return collect(filteredTree);
+  }, [filteredTree]);
+
   const addGroup = async () => {
     try {
       const now = Date.now();
@@ -331,6 +338,95 @@ function App() {
       console.error(err);
     }
   };
+
+  /**
+   * Extract all matching search tabs into a new Chrome window.
+   *   - Open tabs:  physically moved to the new window (old tab closed).
+   *   - Saved tabs: re-parented in the outliner only, status stays 'saved'.
+   * Originals are removed from their old parents in both cases.
+   */
+  const extractToNewWindow = async () => {
+    if (matchingTabs.length === 0) return;
+    try {
+      const now = Date.now();
+      const allFlatNodes = await getAllNodes();
+      const nodeMap = new Map(allFlatNodes.map(n => [n.id, { ...n, childIds: [...n.childIds] }]));
+      const label = searchQuery.trim();
+
+      const openTabs  = matchingTabs.filter(t => t.status === 'open');
+      const savedTabs = matchingTabs.filter(t => t.status !== 'open');
+
+      // Create the new Chrome window with only the currently open tabs.
+      // Saved tabs are logical outliner entries — they don't need a Chrome tab yet.
+      const openUrls = openTabs.map(t => t.url || 'about:blank');
+      const newWin = await chrome.windows.create({
+        url: openUrls.length > 0 ? openUrls : undefined,
+        focused: true
+      });
+      if (!newWin?.id) return;
+
+      // New Window node in the outliner.
+      const newWinNode: BaseNode = {
+        id: `win-${newWin.id}-${generateId()}`,
+        type: 'window',
+        parentId: 'root',
+        childIds: [],
+        title: `Extracted: ${label}`,
+        createdAt: now,
+        updatedAt: now,
+        sortOrder: 0,
+        status: 'open',
+        browserWindowId: newWin.id,
+      };
+
+      const toPersist: BaseNode[] = [newWinNode];
+      const seen = new Set<string>(); // deduplicate old-parent updates
+
+      const reParent = (tab: TreeNode, updatedProps: Partial<BaseNode>) => {
+        const oldParentId = tab.parentId || 'root';
+        const oldParent = nodeMap.get(oldParentId);
+        if (oldParent && !seen.has(oldParentId)) {
+          oldParent.childIds = oldParent.childIds.filter(id => id !== tab.id);
+          toPersist.push(oldParent);
+          seen.add(oldParentId);
+        } else if (oldParent) {
+          oldParent.childIds = oldParent.childIds.filter(id => id !== tab.id);
+        }
+
+        const updated: BaseNode = { ...tab, ...updatedProps, parentId: newWinNode.id, updatedAt: now };
+        delete (updated as any).children;
+        newWinNode.childIds.push(updated.id);
+        toPersist.push(updated);
+      };
+
+      // Move open tabs physically → new window, close old tab.
+      openTabs.forEach((tab, idx) => {
+        const newChromeTabId = newWin.tabs?.[idx]?.id ?? tab.browserTabId;
+        reParent(tab, { browserWindowId: newWin.id, browserTabId: newChromeTabId, status: 'open' });
+        // Close the old physical tab; its new counterpart is already in newWin.
+        if (tab.browserTabId) chrome.tabs.remove(tab.browserTabId).catch(() => {});
+      });
+
+      // Re-parent saved tabs (outliner only) — status stays 'saved'.
+      savedTabs.forEach(tab => {
+        reParent(tab, { browserWindowId: newWin.id, status: 'saved' });
+      });
+
+      // Register new window under root.
+      const rootNode = nodeMap.get('root');
+      if (rootNode) {
+        rootNode.childIds.unshift(newWinNode.id);
+        toPersist.push(rootNode);
+      }
+
+      await putNodes(toPersist);
+      setSearchQuery('');
+      window.dispatchEvent(new CustomEvent('REFRESH_TREE'));
+    } catch (err) {
+      console.error('Extract error:', err);
+    }
+  };
+
 
   const loadTree = async () => {
     try {
@@ -559,6 +655,15 @@ function App() {
           onChange={(e) => setSearchQuery(e.target.value)}
         />
         {isSearching && <button className="clear-search" onClick={() => setSearchQuery('')}>×</button>}
+        {isSearching && matchingTabs.length > 0 && (
+          <button
+            className="extract-btn"
+            onClick={extractToNewWindow}
+            title={`Extract ${matchingTabs.length} tab${matchingTabs.length !== 1 ? 's' : ''} to new window`}
+          >
+            🪟↗ {matchingTabs.length}
+          </button>
+        )}
       </div>
 
       <div className="session-root">
